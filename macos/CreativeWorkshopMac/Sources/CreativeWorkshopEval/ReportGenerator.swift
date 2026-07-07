@@ -50,6 +50,12 @@ enum ReportGenerator {
                         + "| \(previous.map(String.init) ?? "-") | \(diffText) | \(outcome.verificationSummary) |"
                 )
             }
+            // agentic 会话轨迹（评测仪器修缮）：无头评测不落 agent_runs，摘要直接进报告，
+            // 便于诊断"为什么跑满预算/为什么提前停"。
+            for outcome in outcomes where outcome.caseID == caseID && !outcome.sessionSummary.isEmpty {
+                lines.append("")
+                lines.append("- \(outcome.pipeline) 会话：\(outcome.sessionSummary)")
+            }
             lines.append("")
         }
 

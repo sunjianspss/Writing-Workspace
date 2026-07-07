@@ -19,6 +19,8 @@ struct PipelineOutcome: Codable {
     var verificationSummary: String
     /// search_materials 本地检索次数（PRD 23.8.1）：不计入 callCount，单独一列。
     var searchCount: Int
+    /// agentic 会话摘要（评测仪器修缮）：动作序列 + 停止原因，其余管线为空字符串。
+    var sessionSummary: String = ""
 }
 
 enum EvalError: LocalizedError {
@@ -70,7 +72,8 @@ struct PipelineRunner {
             success: outcome.success,
             error: outcome.error,
             verificationSummary: outcome.verificationSummary,
-            searchCount: outcome.searchCount
+            searchCount: outcome.searchCount,
+            sessionSummary: outcome.sessionSummary
         )
     }
 }

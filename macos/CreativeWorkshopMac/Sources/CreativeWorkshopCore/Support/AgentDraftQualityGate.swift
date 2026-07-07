@@ -70,6 +70,34 @@ package enum AgentDraftQualityGateEvaluator {
         return AgentDraftQualityGate(items: items)
     }
 
+    /// 内容级检查（评测仪器修缮）：不依赖 AgentDraftTrace，对任何管线的最终产物统一适用，
+    /// 供 eval 报告的"验证信号"列使用。只含正文本身可判定的项，零模型调用。
+    package static func contentOnlyItems(content: String, knownPitfalls: [String]) -> [QualityGateItem] {
+        [
+            contentIntegrityItem(content: content),
+            pitfallScanItem(content: content, knownPitfalls: knownPitfalls)
+        ]
+    }
+
+    private static func contentIntegrityItem(content: String) -> QualityGateItem {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return QualityGateItem(title: "内容完整性", detail: "正文为空。", status: .review)
+        }
+        if let lastScalar = trimmed.unicodeScalars.last, !sentenceEndingCharacters.contains(lastScalar) {
+            return QualityGateItem(
+                title: "内容完整性",
+                detail: "正文 \(trimmed.count) 字；结尾字符「\(trimmed.suffix(1))」不是句末标点，疑似截断。",
+                status: .review
+            )
+        }
+        return QualityGateItem(
+            title: "内容完整性",
+            detail: "正文 \(trimmed.count) 字，结尾标点正常。",
+            status: .passed
+        )
+    }
+
     private static func briefItem(_ trace: AgentDraftTrace) -> QualityGateItem {
         let missing = [
             trace.coreQuestion.trimmedNonEmpty == nil ? "核心问题" : nil,
