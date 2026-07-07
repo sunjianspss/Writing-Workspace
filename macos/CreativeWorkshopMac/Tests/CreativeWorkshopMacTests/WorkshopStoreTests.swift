@@ -1,0 +1,1070 @@
+import XCTest
+@testable import CreativeWorkshopMac
+@testable import CreativeWorkshopCore
+
+@MainActor
+final class WorkshopStoreTests: XCTestCase {
+    /// PRD 23.6 验收标准 8：实验室开关默认关闭时，会话入口直接拒绝，不进入循环，
+    /// 且系统其余行为（agentRuns/pendingDraftReview）与实施前完全一致。
+    func testStartAgentSessionRejectsWhenAgentLabDisabled() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        XCTAssertFalse(store.agentLabEnabled, "默认应关闭")
+        XCTAssertFalse(store.canStartAgentSession)
+
+        await store.startAgentSession()
+
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertTrue(store.agentRuns.isEmpty, "入口拒绝时不应产生任何 agent_runs 记录")
+    }
+
+    /// PRD 23.6.5：任务 15 的核心状态流转——ask_author 暂停出现提问卡，续跑后（预算继承）
+    /// 模型选择 finish，会话摘要与最终稿一次性进入待复核，提问卡随之清空。
+    func testAgentSessionAskAuthorPausesThenResumeDeliversPendingReview() async throws {
+        let database = try makeDatabase()
+        let executor = DecisionScriptedExecutor()
+        executor.decisions = [
+            AgentDecisionResult(
+                action: "ask_author",
+                arguments: AgentDecisionArguments(query: "需要更多关于XX的素材"),
+                reason: "缺证据",
+                stop: false
+            )
+        ]
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.setAgentLabEnabled(true)
+        store.apiKeyInput = "fake-key"
+        store.ideaInput = "一个想法"
+
+        await store.startAgentSession()
+
+        let askAuthor = try XCTUnwrap(store.agentSessionAskAuthor, "ask_author 应暂停会话并出现提问卡")
+        XCTAssertEqual(askAuthor.questions, ["需要更多关于XX的素材"])
+        XCTAssertNil(store.pendingDraftReview, "暂停阶段不应交付待复核")
+
+        executor.decisions = [AgentDecisionResult(action: "finish", reason: "已经足够", stop: true)]
+        await store.resumeAgentSession()
+
+        XCTAssertNil(store.agentSessionAskAuthor, "续跑完成后提问卡应清空")
+        let pending = try XCTUnwrap(store.pendingDraftReview, "finish 应把最终稿交付待复核")
+        XCTAssertEqual(pending.agentSessionSummary?.first, "共 1 步，停止原因：模型判断可以结束会话")
+    }
+
+    /// 「就此结束」路径：不再消耗模型调用，直接按 finish 语义交付暂停时的最好版本。
+    func testFinishAgentSessionNowDeliversWithoutFurtherModelCalls() async throws {
+        let database = try makeDatabase()
+        let executor = DecisionScriptedExecutor()
+        executor.decisions = [
+            AgentDecisionResult(action: "ask_author", arguments: AgentDecisionArguments(query: "需要确认时间线"), reason: "缺证据", stop: false)
+        ]
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.setAgentLabEnabled(true)
+        store.apiKeyInput = "fake-key"
+        store.ideaInput = "一个想法"
+
+        await store.startAgentSession()
+        XCTAssertNotNil(store.agentSessionAskAuthor)
+        let callsBeforeFinish = executor.callCounts["agent-decision-native"] ?? 0
+
+        await store.finishAgentSessionNow()
+
+        XCTAssertNil(store.agentSessionAskAuthor)
+        let pending = try XCTUnwrap(store.pendingDraftReview)
+        XCTAssertEqual(pending.agentSessionSummary?.first, "共 0 步，停止原因：作者选择结束会话，交付当前最好版本")
+        XCTAssertEqual(executor.callCounts["agent-decision-native"], callsBeforeFinish, "就此结束不应再消耗模型调用")
+    }
+
+    /// PRD 23.8.1 验收标准 3：会话内 search_materials 命中的素材应能在交付的待复核卡片上看到（retrievedFragments）。
+    func testAgentSessionSearchMaterialsSurfacesRetrievedFragmentsOnPendingReview() async throws {
+        let database = try makeDatabase()
+        _ = try database.saveIdea(
+            id: nil,
+            payload: IdeaSaveRequest(
+                title: "成都茶馆",
+                content: "在成都茶馆里，时间慢下来，人和人的关系不靠饭局，而靠长期信任。",
+                type: "素材",
+                tags: ["成都"],
+                used: 0,
+                related_article_id: nil
+            )
+        )
+        let executor = DecisionScriptedExecutor()
+        executor.decisions = [
+            AgentDecisionResult(
+                action: "search_materials",
+                arguments: AgentDecisionArguments(query: "成都 长期 信任"),
+                reason: "先检索本地素材",
+                stop: false
+            ),
+            AgentDecisionResult(action: "finish", reason: "已经足够", stop: true)
+        ]
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.setAgentLabEnabled(true)
+        store.apiKeyInput = "fake-key"
+        store.ideaInput = "一个想法"
+
+        await store.startAgentSession()
+
+        let pending = try XCTUnwrap(store.pendingDraftReview, "finish 应把最终稿交付待复核")
+        let fragments = try XCTUnwrap(pending.retrievedFragments)
+        XCTAssertFalse(fragments.isEmpty, "search_materials 命中的素材应出现在待复核卡片的引用轨迹里")
+        XCTAssertEqual(fragments.first?.source_type, "idea")
+    }
+
+    func testReviewGuardUsesInjectedAIOnlyAfterConfirmation() async throws {
+        let database = try makeDatabase()
+        let ai = FakeAIClient()
+        let store = try WorkshopStore(database: database, aiClient: ai)
+        store.title = "一篇文章"
+        store.summary = ""
+        store.content = "正文"
+        store.outline = ""
+        store.ideaInput = ""
+
+        store.latestReview = try database.saveWritingReview(
+            result: WritingReviewResult(
+                summary: "旧诊断",
+                overall_score: 70,
+                strengths: [],
+                issues: [],
+                revision_plan: [],
+                training_focus: [],
+                style_notes: [],
+                raw_output: nil
+            ),
+            articleID: nil,
+            titleSnapshot: store.title,
+            model: "fake",
+            reviewedSnapshot: ["一篇文章", "", "正文", "", ""].joined(separator: "\u{1F}")
+        )
+
+        await store.reviewCurrentDraft()
+
+        XCTAssertTrue(store.showUnchangedReviewPrompt)
+        XCTAssertEqual(ai.writingReviewCallCount, 0)
+
+        await store.confirmReviewDespiteNoChange()
+
+        XCTAssertFalse(store.showUnchangedReviewPrompt)
+        XCTAssertEqual(ai.writingReviewCallCount, 1)
+        XCTAssertEqual(store.latestReview?.summary, "假 AI 诊断")
+    }
+
+    func testPendingDraftReviewCanConfirmAndDiscardWithRealDatabase() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let before = DraftSnapshot(title: "旧标题", summary: "", content: "旧正文")
+        let after = DraftSnapshot(title: "新标题", summary: "", content: "新正文")
+        let version = try database.saveDraftVersion(
+            articleID: nil,
+            titleSnapshot: "新标题",
+            action: "测试待复核",
+            note: nil,
+            before: before,
+            after: after,
+            reviewStatus: "pending"
+        )
+        store.draftVersions = [version]
+        store.pendingDraftReview = PendingDraftReview(
+            draftVersionID: version.id,
+            actionTitle: "测试待复核",
+            articleID: nil,
+            before: before,
+            after: after,
+            note: nil,
+            usedFallback: false,
+            selfCheck: nil,
+            matchedPitfalls: [],
+            agentTrace: nil,
+            retrievedFragments: nil,
+            iterationSummary: nil,
+            candidateJudgement: nil
+        )
+
+        await store.confirmPendingDraftReview()
+
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertEqual(try database.listDraftVersions(limit: 1).first?.review_status, "confirmed")
+
+        let discardVersion = try database.saveDraftVersion(
+            articleID: nil,
+            titleSnapshot: "新标题",
+            action: "测试放弃",
+            note: nil,
+            before: before,
+            after: after,
+            reviewStatus: "pending"
+        )
+        store.content = after.content
+        store.draftVersions = [discardVersion]
+        store.pendingDraftReview = PendingDraftReview(
+            draftVersionID: discardVersion.id,
+            actionTitle: "测试放弃",
+            articleID: nil,
+            before: before,
+            after: after,
+            note: nil,
+            usedFallback: false,
+            selfCheck: nil,
+            matchedPitfalls: [],
+            agentTrace: nil,
+            retrievedFragments: nil,
+            iterationSummary: nil,
+            candidateJudgement: nil
+        )
+
+        await store.discardPendingDraftReview()
+
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertEqual(store.content, before.content)
+        XCTAssertTrue(try database.listDraftVersions().allSatisfy { $0.id != discardVersion.id })
+    }
+
+    func testIssueRewriteRejectsApplyingWhenContentChanged() async throws {
+        let database = try makeDatabase()
+        let ai = FakeAIClient()
+        let store = try WorkshopStore(database: database, aiClient: ai)
+        store.title = "标题"
+        store.content = "这里有一段需要修改的正文。"
+
+        let issue = WritingReviewIssue(
+            dimension: "表达",
+            severity: "中",
+            excerpt: "一段需要修改",
+            problem: "表达生硬",
+            suggestion: "改得自然一点"
+        )
+
+        await store.rewriteFromIssue(issue)
+
+        XCTAssertEqual(ai.rewriteCallCount, 1)
+        XCTAssertNotNil(store.pendingIssueRewrite)
+
+        store.content = "正文已经被手工改过。"
+        await store.confirmPendingIssueRewrite()
+
+        XCTAssertNil(store.pendingIssueRewrite)
+        XCTAssertTrue(store.statusText.contains("正文已变化"))
+    }
+
+    func testAuditIssueCanEnterPendingRewriteFlow() async throws {
+        let database = try makeDatabase()
+        let ai = FakeAIClient()
+        let store = try WorkshopStore(database: database, aiClient: ai)
+        store.title = "标题"
+        store.content = "这里有一个葬花呤错字。"
+        let issue = AuditIssue(category: "错字", severity: "中", excerpt: "葬花呤", problem: "疑似错字", suggestion: "改为葬花吟")
+
+        XCTAssertTrue(store.canLocateAuditIssue(issue))
+        await store.rewriteFromAuditIssue(issue)
+
+        XCTAssertEqual(ai.rewriteCallCount, 1)
+        XCTAssertNotNil(store.pendingIssueRewrite)
+        XCTAssertEqual(store.pendingIssueRewrite?.issue.dimension, "错字")
+        XCTAssertEqual(store.content, "这里有一个葬花呤错字。")
+    }
+
+    func testPrePublishAuditCoordinatorPersistsLocalQuoteFindings() async throws {
+        let database = try makeDatabase()
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "标题",
+                content: "文中引用：“这是一句需要核对的引文”。",
+                summary: "",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: nil
+            )
+        )
+        let output = try await PrePublishAuditCoordinator(aiClient: FakeAIClient(), database: database).run(
+            PrePublishAuditInput(
+                articleID: article.id,
+                title: article.displayTitle,
+                summary: "",
+                content: article.content ?? "",
+                style: try database.defaultStyle(),
+                template: nil,
+                config: ModelConfig(),
+                apiKey: "fake-key",
+                model: "fake-model"
+            )
+        )
+
+        XCTAssertTrue(output.note.contains("终审提示"))
+        XCTAssertEqual(output.audit?.issues.first?.category, "引文核对")
+        XCTAssertEqual(try database.listArticles().first?.audit_report?.quote_issues?.first?.excerpt, "这是一句需要核对的引文")
+    }
+
+    func testSavingNewPublishedArticleRunsAuditAndPublishingMetrics() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let version = try database.saveDraftVersion(
+            articleID: nil,
+            titleSnapshot: "新发布文章",
+            action: "代理生成初稿",
+            note: nil,
+            before: DraftSnapshot(title: "", summary: "", content: ""),
+            after: DraftSnapshot(title: "新发布文章", summary: "", content: "AI 确认稿"),
+            reviewStatus: "confirmed"
+        )
+        store.title = "新发布文章"
+        store.content = "AI 确认稿，发布前补了一句。"
+        store.articleStatus = "已发布"
+
+        await store.saveArticle()
+
+        let article = try XCTUnwrap(database.listArticles().first)
+        XCTAssertEqual(article.status, "已发布")
+        XCTAssertNotNil(article.audit_report)
+        XCTAssertEqual(try database.listEditRecords(limit: 10).first?.draft_version_id, version.id)
+        XCTAssertEqual(store.latestPrePublishAudit?.article_id, article.id)
+        XCTAssertEqual(store.editRecordStats?.total, 1)
+    }
+
+    func testDeepDraftStopsAtConfiguredMaxRoundsAndKeepsBestDraft() async throws {
+        let ai = FakeAIClient()
+        ai.writingReviewResponses = [
+            reviewResponse(score: 60, issue: "第一轮问题"),
+            reviewResponse(score: 64, issue: "第二轮问题")
+        ]
+        ai.improveDraftResponses = [
+            draftResponse(content: "第一轮修订正文", summary: "第一轮修订"),
+            draftResponse(content: "第二轮修订正文", summary: "第二轮修订")
+        ]
+
+        let output = try await DeepDraftCoordinator(aiClient: ai).run(
+            input: deepDraftInput(maxRounds: 2)
+        )
+
+        XCTAssertEqual(output.iterations.count, 2)
+        XCTAssertEqual(output.steps.count, 4)
+        XCTAssertEqual(output.iterations.last?.stoppedReason, "达到最大轮数")
+        XCTAssertEqual(output.draft.content, "第二轮修订正文")
+        XCTAssertEqual(ai.writingReviewCallCount, 2)
+        XCTAssertEqual(ai.improveDraftCallCount, 2)
+    }
+
+    func testDeepDraftReturnsCurrentDraftWhenReviewFails() async throws {
+        let ai = FakeAIClient()
+        ai.writingReviewResponses = [
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "诊断失败，本地结果为空风险。",
+                    overall_score: nil,
+                    strengths: [],
+                    issues: [],
+                    revision_plan: [],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil
+                ),
+                elapsed_ms: 1,
+                success: false,
+                error: "网络失败",
+                input_summary: "fake",
+                output_summary: "fake"
+            )
+        ]
+
+        let output = try await DeepDraftCoordinator(aiClient: ai).run(
+            input: deepDraftInput(maxRounds: 3)
+        )
+
+        XCTAssertFalse(output.success)
+        XCTAssertEqual(output.error, "网络失败")
+        XCTAssertEqual(output.draft.title, "标题")
+        XCTAssertEqual(output.draft.summary, "摘要")
+        XCTAssertEqual(output.draft.content, "原始正文")
+        XCTAssertEqual(output.iterations.count, 1)
+        XCTAssertEqual(output.steps.count, 1)
+        XCTAssertEqual(output.iterations.first?.stoppedReason, "第 1 轮诊断调用失败，提前结束")
+        XCTAssertEqual(ai.improveDraftCallCount, 0)
+    }
+
+    /// pitfall_hits 非空时，即使诊断没有剩余高/中严重度问题，也不得停止深度成稿循环（PRD 22.4.3）。
+    func testDeepDraftDoesNotStopWhenModelReportedPitfallHitRemains() async throws {
+        let ai = FakeAIClient()
+        ai.writingReviewResponses = [
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "分数高，但雷区仍在。",
+                    overall_score: 95,
+                    strengths: [],
+                    issues: [
+                        WritingReviewIssue(
+                            dimension: "作者雷区",
+                            severity: "低",
+                            excerpt: nil,
+                            problem: "不要鸡汤式收束",
+                            suggestion: "把结尾落回具体经验。"
+                        )
+                    ],
+                    revision_plan: ["修正雷区"],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil,
+                    resolved_from_last: [],
+                    pitfall_hits: ["不要鸡汤式收束"]
+                ),
+                elapsed_ms: 1,
+                success: true,
+                error: "",
+                input_summary: "fake",
+                output_summary: "fake"
+            ),
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "雷区已解除。",
+                    overall_score: 96,
+                    strengths: [],
+                    issues: [],
+                    revision_plan: [],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil
+                ),
+                elapsed_ms: 1,
+                success: true,
+                error: "",
+                input_summary: "fake",
+                output_summary: "fake"
+            )
+        ]
+        ai.improveDraftResponses = [
+            draftResponse(content: "修正雷区后的正文", summary: "已修正雷区")
+        ]
+        var input = deepDraftInput(maxRounds: 3)
+        input.style.known_pitfalls = [
+            AuthorPitfall(description: "不要鸡汤式收束", source_review_id: 1, created_at: nil)
+        ]
+
+        let output = try await DeepDraftCoordinator(aiClient: ai).run(input: input)
+
+        XCTAssertEqual(ai.improveDraftCallCount, 1)
+        XCTAssertEqual(output.draft.content, "修正雷区后的正文")
+        XCTAssertTrue(output.iterations.first?.remainingIssues.contains { $0.contains("作者雷区") } == true)
+        XCTAssertEqual(output.iterations.last?.stoppedReason, "无高/中严重度问题且未命中作者雷区")
+    }
+
+    /// 主判据：上一轮高/中严重度 issues 的核销率 ≥0.8 且本轮无新增高严重度问题、无 pitfall_hits 时应停止（PRD 22.4.3）。
+    func testDeepDraftStopsWhenResolutionRateOfLastHighMediumIssuesIsHighEnough() async throws {
+        let ai = FakeAIClient()
+        let previousIssues = (1...5).map { index in
+            WritingReviewIssue(
+                dimension: "结构",
+                severity: "高",
+                excerpt: nil,
+                problem: "历史问题\(index)",
+                suggestion: "继续修订"
+            )
+        }
+        let previousReview = WritingReview(
+            id: 1,
+            article_id: nil,
+            title_snapshot: "标题",
+            summary: "上一轮诊断",
+            overall_score: 60,
+            strengths: [],
+            issues: previousIssues,
+            revision_plan: [],
+            training_focus: [],
+            style_notes: [],
+            raw_output: nil,
+            model: nil,
+            created_at: nil,
+            resolved_from_last: [],
+            reviewed_snapshot: nil
+        )
+        ai.writingReviewResponses = [
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "高严重度问题已基本核销。",
+                    overall_score: 82,
+                    strengths: [],
+                    issues: [
+                        WritingReviewIssue(
+                            dimension: "表达",
+                            severity: "中",
+                            excerpt: nil,
+                            problem: "仍有一处表达偏软",
+                            suggestion: "再具体一点"
+                        )
+                    ],
+                    revision_plan: [],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil,
+                    resolved_from_last: ["历史问题1", "历史问题2", "历史问题3", "历史问题4"]
+                ),
+                elapsed_ms: 1,
+                success: true,
+                error: "",
+                input_summary: "fake",
+                output_summary: "fake"
+            )
+        ]
+        var input = deepDraftInput(maxRounds: 3)
+        input.previousReview = previousReview
+
+        let output = try await DeepDraftCoordinator(aiClient: ai).run(input: input)
+
+        XCTAssertEqual(ai.improveDraftCallCount, 0)
+        XCTAssertEqual(output.iterations.count, 1)
+        XCTAssertEqual(output.iterations.first?.stoppedReason, "上一轮问题核销率达标")
+    }
+
+    /// 连续两轮核销率 < 0.3 判定为空转，即使还没到最大轮数也应停止（PRD 22.4.3）。
+    func testDeepDraftStopsWhenResolutionRateStaysLowForTwoConsecutiveRounds() async throws {
+        let ai = FakeAIClient()
+        let previousIssues = (1...5).map { index in
+            WritingReviewIssue(
+                dimension: "结构",
+                severity: "高",
+                excerpt: nil,
+                problem: "历史问题\(index)",
+                suggestion: "继续修订"
+            )
+        }
+        let previousReview = WritingReview(
+            id: 1,
+            article_id: nil,
+            title_snapshot: "标题",
+            summary: "上一轮诊断",
+            overall_score: 50,
+            strengths: [],
+            issues: previousIssues,
+            revision_plan: [],
+            training_focus: [],
+            style_notes: [],
+            raw_output: nil,
+            model: nil,
+            created_at: nil,
+            resolved_from_last: [],
+            reviewed_snapshot: nil
+        )
+        ai.writingReviewResponses = [
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "第一轮几乎没有推进。",
+                    overall_score: 52,
+                    strengths: [],
+                    issues: (1...4).map { index in
+                        WritingReviewIssue(
+                            dimension: "结构",
+                            severity: "高",
+                            excerpt: nil,
+                            problem: "新问题\(index)",
+                            suggestion: "继续修订"
+                        )
+                    },
+                    revision_plan: ["继续修订"],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil,
+                    resolved_from_last: []
+                ),
+                elapsed_ms: 1,
+                success: true,
+                error: "",
+                input_summary: "fake",
+                output_summary: "fake"
+            ),
+            WritingReviewResponse(
+                result: WritingReviewResult(
+                    summary: "第二轮仍然没有推进。",
+                    overall_score: 53,
+                    strengths: [],
+                    issues: (1...3).map { index in
+                        WritingReviewIssue(
+                            dimension: "结构",
+                            severity: "高",
+                            excerpt: nil,
+                            problem: "遗留问题\(index)",
+                            suggestion: "继续修订"
+                        )
+                    },
+                    revision_plan: ["继续修订"],
+                    training_focus: [],
+                    style_notes: [],
+                    raw_output: nil,
+                    resolved_from_last: []
+                ),
+                elapsed_ms: 1,
+                success: true,
+                error: "",
+                input_summary: "fake",
+                output_summary: "fake"
+            )
+        ]
+        ai.improveDraftResponses = [
+            draftResponse(content: "第一轮修订正文", summary: "第一轮修订")
+        ]
+        var input = deepDraftInput(maxRounds: 5)
+        input.previousReview = previousReview
+
+        let output = try await DeepDraftCoordinator(aiClient: ai).run(input: input)
+
+        XCTAssertEqual(ai.writingReviewCallCount, 2)
+        XCTAssertEqual(ai.improveDraftCallCount, 1)
+        XCTAssertEqual(output.iterations.count, 2)
+        XCTAssertEqual(output.iterations.last?.stoppedReason, "连续两轮问题核销率过低，判定为空转")
+    }
+
+    func testQuickDraftCircuitBreaksWhenSectionDraftStepFailsAndSkipsCritique() async throws {
+        let database = try makeDatabase()
+        let executor = ScriptedAgentExecutor()
+        executor.results["agent-draft-sections-native"] = ScriptedAgentExecutor.StepResult(success: false, error: "网络失败")
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.ideaInput = "一个想法"
+        store.content = "已有正文"
+
+        await store.quickDraft()
+
+        // 素材为空时本地兜底论点检查总会标出缺证据项，触发一轮 Brief 修订（PRD 22.2.1），
+        // 分段成稿因此变成第 4 步，而不是没有修订步骤时的第 3 步。
+        XCTAssertEqual(executor.callCounts["agent-draft-brief-revision-native"] ?? 0, 1)
+        XCTAssertEqual(executor.callCounts["agent-draft-critique-native"] ?? 0, 0)
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertEqual(store.content, "已有正文")
+        XCTAssertTrue(store.statusText.contains("第 4 步"))
+        XCTAssertTrue(store.statusText.contains("网络失败"))
+    }
+
+    func testQuickDraftUsesFallbackAllTheWayWhenAPIKeyMissing() async throws {
+        let database = try makeDatabase()
+        let executor = ScriptedAgentExecutor()
+        let missingKeyMessage = NativeAIError.missingAPIKeyMessage
+        for endpoint in [
+            "agent-draft-brief-native",
+            "agent-draft-argument-check-native",
+            "agent-draft-sections-native",
+            "agent-draft-critique-native"
+        ] {
+            executor.results[endpoint] = ScriptedAgentExecutor.StepResult(success: false, error: missingKeyMessage)
+        }
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.ideaInput = "一个想法"
+
+        await store.quickDraft()
+
+        XCTAssertEqual(executor.callCounts["agent-draft-critique-native"] ?? 0, 1)
+        XCTAssertNotNil(store.pendingDraftReview)
+        XCTAssertEqual(store.pendingDraftReview?.usedFallback, true)
+    }
+
+    /// 22.3.4：候选评委的呈现顺序应被打乱以消除位置偏置，但候选编号必须可注入固定种子复现，
+    /// 且编号与内容的对应关系不能因为打乱呈现顺序而丢失。
+    func testGenerateDraftAlternativesShufflesPresentationOrderReproducibleWithSeed() async throws {
+        let content = "这是正文第一段，用于测试候选评委顺序随机化的功能是否正确工作。"
+
+        let database1 = try makeDatabase()
+        let store1 = try WorkshopStore(database: database1, aiClient: FakeAIClient(), candidateShuffleRNG: SeededRNG(seed: 42))
+        store1.title = "标题"
+        store1.content = content
+        await store1.generateDraftAlternatives()
+
+        let database2 = try makeDatabase()
+        let store2 = try WorkshopStore(database: database2, aiClient: FakeAIClient(), candidateShuffleRNG: SeededRNG(seed: 42))
+        store2.title = "标题"
+        store2.content = content
+        await store2.generateDraftAlternatives()
+
+        let orderLine1 = try presentationOrderLine(from: store1)
+        let orderLine2 = try presentationOrderLine(from: store2)
+
+        XCTAssertEqual(orderLine1, orderLine2, "相同随机种子应复现相同的候选呈现顺序")
+
+        let indices = orderLine1
+            .replacingOccurrences(of: "呈现顺序：", with: "")
+            .split(separator: ",")
+            .compactMap { Int($0) }
+        XCTAssertEqual(Set(indices), Set([1, 2, 3]), "打乱的应是呈现顺序，候选编号本身不应丢失或重复")
+
+        // 深加工版（编号 3）内容最长、段落最完整，本地兜底评委总会选它；
+        // 无论呈现顺序如何打乱，评委按编号解析 best_candidate_index，因此这里应始终稳定选中候选 3——
+        // 如果打乱顺序时把编号也搞乱了，这里就会选错。
+        XCTAssertTrue(store1.statusText.contains("候选 3"))
+        XCTAssertTrue(store2.statusText.contains("候选 3"))
+    }
+
+    /// 23.5：generate_topics 成功后暂停等待作者确认待复核产物，确认后应自动继续下一步并整体完成。
+    func testExecuteAdvisorPlanPausesForPendingReviewThenContinuesOnConfirm() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.ideaInput = "一个想法"
+        store.latestAdvisorRun = try makeAdvisorRun(database: database, actions: ["quick_draft", "writing_review"])
+
+        let planTask = Task { await store.executeAdvisorPlan() }
+        try await waitUntil(timeout: 2) { store.pendingDraftReview != nil }
+
+        XCTAssertEqual(store.advisorPlanProgress?.currentAction, .quickDraft)
+        XCTAssertFalse(store.agentRuns.contains { $0.run_type == "写作诊断" })
+
+        await store.confirmPendingDraftReview()
+        await planTask.value
+
+        XCTAssertNil(store.advisorPlanProgress)
+        XCTAssertEqual(store.statusText, "计划执行完成")
+        XCTAssertTrue(store.agentRuns.contains { $0.run_type == "写作诊断" })
+        let planRun = try XCTUnwrap(store.agentRuns.first { $0.run_type == "按计划执行" })
+        XCTAssertEqual(planRun.session_kind, "plan_execution")
+        XCTAssertEqual(planRun.status, "success")
+        XCTAssertEqual(planRun.steps.map(\.status), ["success", "success"])
+    }
+
+    /// 23.5：作者放弃待复核产物时，整个计划序列必须停止，不得继续后续步骤。
+    func testExecuteAdvisorPlanStopsWhenAuthorDiscardsPendingReview() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.ideaInput = "一个想法"
+        store.latestAdvisorRun = try makeAdvisorRun(database: database, actions: ["quick_draft", "writing_review"])
+
+        let planTask = Task { await store.executeAdvisorPlan() }
+        try await waitUntil(timeout: 2) { store.pendingDraftReview != nil }
+
+        await store.discardPendingDraftReview()
+        await planTask.value
+
+        XCTAssertNil(store.advisorPlanProgress)
+        XCTAssertTrue(store.statusText.contains("计划已停止"))
+        XCTAssertFalse(store.agentRuns.contains { $0.run_type == "写作诊断" }, "被放弃后不应继续执行后续步骤")
+        let planRun = try XCTUnwrap(store.agentRuns.first { $0.run_type == "按计划执行" })
+        XCTAssertEqual(planRun.status, "fallback")
+        XCTAssertEqual(planRun.steps.map(\.status), ["abandoned"])
+    }
+
+    /// 23.5：中途某步失败时序列必须停止并保留已完成步骤的产物，且不得继续执行后续步骤。
+    func testExecuteAdvisorPlanStopsAtFailedStepAndKeepsCompletedStepResults() async throws {
+        let database = try makeDatabase()
+        let executor = ScriptedAgentExecutor()
+        executor.results["agent-draft-sections-native"] = ScriptedAgentExecutor.StepResult(success: false, error: "网络失败")
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.ideaInput = "一个想法"
+        store.latestAdvisorRun = try makeAdvisorRun(database: database, actions: ["generate_topics", "quick_draft", "writing_review"])
+
+        await store.executeAdvisorPlan()
+
+        XCTAssertNil(store.advisorPlanProgress)
+        XCTAssertTrue(store.statusText.contains("第 2 步"))
+        XCTAssertTrue(store.statusText.contains("失败"))
+        XCTAssertTrue(store.agentRuns.contains { $0.run_type == "生成选题" }, "第一步已完成，产物应保留")
+        XCTAssertFalse(store.agentRuns.contains { $0.run_type == "写作诊断" }, "第三步不应被执行")
+        let planRun = try XCTUnwrap(store.agentRuns.first { $0.run_type == "按计划执行" })
+        XCTAssertEqual(planRun.status, "fallback")
+        XCTAssertEqual(planRun.steps.map(\.status), ["success", "failed"])
+    }
+
+    /// 23.5：沿用现有取消机制——正在执行的某一步被全局"取消"按钮打断时，整个计划必须立即停止，
+    /// 不得继续执行后续步骤，且不属于"失败"（不应出现"失败"字样，应体现为取消）。
+    func testExecuteAdvisorPlanStopsImmediatelyWhenCurrentStepIsCancelled() async throws {
+        let database = try makeDatabase()
+        let ai = SlowFakeAIClient(delayNanoseconds: 200_000_000)
+        let store = try WorkshopStore(database: database, aiClient: ai)
+        store.ideaInput = "一个想法"
+        store.latestAdvisorRun = try makeAdvisorRun(database: database, actions: ["generate_outline", "draft_from_outline"])
+
+        let planTask = Task { await store.executeAdvisorPlan() }
+        try await waitUntil(timeout: 2) { store.canCancelCurrentOperation }
+        store.cancelCurrentOperation()
+        await planTask.value
+
+        XCTAssertNil(store.advisorPlanProgress)
+        XCTAssertFalse(store.statusText.contains("失败"))
+        XCTAssertFalse(store.agentRuns.contains { $0.run_type == "大纲成稿" }, "被取消后不应继续执行后续步骤")
+        let planRun = try XCTUnwrap(store.agentRuns.first { $0.run_type == "按计划执行" })
+        XCTAssertEqual(planRun.status, "fallback")
+        XCTAssertEqual(planRun.steps.map(\.status), ["cancelled"])
+    }
+
+    private func makeAdvisorRun(database: NativeDatabase, actions: [String]) throws -> WritingAdvisorRun {
+        try database.saveWritingAdvisorRun(
+            result: WritingAdvisorResult(
+                stage: "初稿阶段",
+                main_problem: "缺少场景",
+                next_action: "先诊断",
+                reason: "测试用固定建议",
+                suggested_actions: actions,
+                focus_area: nil,
+                context_findings: [],
+                execution_plan: [],
+                risk_notes: [],
+                raw_output: nil
+            ),
+            context: ContextPackage(
+                stage: "初稿阶段",
+                title: "",
+                summary: "",
+                idea: "一个想法",
+                direction: "情感文学",
+                outline_excerpt: "",
+                content_excerpt: "",
+                materials_excerpt: "",
+                selected_topic_title: nil,
+                selected_topic_summary: nil,
+                style_name: "默认",
+                style_brief: "克制",
+                word_count: 0,
+                paragraph_count: 0,
+                material_count: 0,
+                recent_article_titles: [],
+                recent_training_focus: [],
+                recent_issues: []
+            ),
+            articleID: nil,
+            titleSnapshot: "",
+            model: "fake-model"
+        )
+    }
+
+    private func waitUntil(timeout: TimeInterval, condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline {
+                XCTFail("等待条件超时")
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    private func presentationOrderLine(from store: WorkshopStore) throws -> String {
+        let steps = try XCTUnwrap(store.agentRuns.first?.steps)
+        let judgeStep = try XCTUnwrap(steps.first { $0.name == "候选评委排序" })
+        let inputSummary = try XCTUnwrap(judgeStep.input_summary)
+        return try XCTUnwrap(inputSummary.components(separatedBy: "\n---\n").first)
+    }
+
+    private func makeDatabase() throws -> NativeDatabase {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return try NativeDatabase(databaseURL: directory.appending(path: "creative_workshop.sqlite3"))
+    }
+
+    private func deepDraftInput(maxRounds: Int) -> DeepDraftInput {
+        DeepDraftInput(
+            title: "标题",
+            summary: "摘要",
+            content: "原始正文",
+            outline: "大纲",
+            idea: "想法",
+            direction: "情感文学",
+            materials: "素材",
+            style: StyleProfile(
+                id: 1,
+                name: "测试风格",
+                language_style: "中文",
+                tone: "克制",
+                structure_preference: "先场景后观察",
+                favorite_expressions: nil,
+                forbidden_expressions: nil,
+                sample_texts: nil,
+                title_style_like: nil,
+                title_style_dislike: nil,
+                is_default: 1
+            ),
+            previousReview: nil,
+            writingReviewTemplate: nil,
+            config: ModelConfig(),
+            apiKey: "fake-key",
+            maxRounds: maxRounds,
+            targetScore: 90
+        )
+    }
+
+    private func reviewResponse(score: Int, issue: String) -> WritingReviewResponse {
+        WritingReviewResponse(
+            result: WritingReviewResult(
+                summary: issue,
+                overall_score: score,
+                strengths: [],
+                issues: [
+                    WritingReviewIssue(
+                        dimension: "结构",
+                        severity: "高",
+                        excerpt: nil,
+                        problem: issue,
+                        suggestion: "继续修订"
+                    )
+                ],
+                revision_plan: ["继续修订"],
+                training_focus: ["结构"],
+                style_notes: [],
+                raw_output: nil
+            ),
+            elapsed_ms: 1,
+            success: true,
+            error: "",
+            input_summary: "fake",
+            output_summary: "fake"
+        )
+    }
+
+    private func draftResponse(content: String, summary: String) -> DraftResponse {
+        DraftResponse(
+            result: DraftResult(title: "标题", content: content, summary: summary, tags: nil, raw_output: nil),
+            elapsed_ms: 1,
+            success: true,
+            error: "",
+            input_summary: "fake",
+            output_summary: "fake"
+        )
+    }
+}
+
+/// 固定种子的确定性随机源，用于验证候选评委呈现顺序在相同种子下可复现（22.3.4）。
+private struct SeededRNG: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        self.state = seed
+    }
+
+    mutating func next() -> UInt64 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return state
+    }
+}
+
+private final class FakeAIClient: AIWorkflowExecuting {
+    var writingReviewCallCount = 0
+    var rewriteCallCount = 0
+    var improveDraftCallCount = 0
+    var writingReviewResponses: [WritingReviewResponse] = []
+    var improveDraftResponses: [DraftResponse] = []
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        switch descriptor.kind {
+        case .writingReview:
+            writingReviewCallCount += 1
+            if !writingReviewResponses.isEmpty {
+                let response = writingReviewResponses.removeFirst()
+                return run(response.result, success: response.success == true, error: response.error ?? "", inputSummary: response.input_summary ?? "fake", outputSummary: response.output_summary ?? "fake")
+            }
+            return run(WritingReviewResult(
+                summary: "假 AI 诊断",
+                overall_score: 82,
+                strengths: ["方向清楚"],
+                issues: [],
+                revision_plan: [],
+                training_focus: [],
+                style_notes: [],
+                raw_output: nil
+            ))
+        case .improveFromReview:
+            improveDraftCallCount += 1
+            if !improveDraftResponses.isEmpty {
+                let response = improveDraftResponses.removeFirst()
+                return run(response.result, success: response.success == true, error: response.error ?? "", inputSummary: response.input_summary ?? "fake", outputSummary: response.output_summary ?? "fake")
+            }
+            return run(descriptor.fallback())
+        case .rewriteSelection:
+            rewriteCallCount += 1
+            return run(RewriteResult(replacement: "改写后的片段", note: "fake", raw_output: nil))
+        default:
+            return run(descriptor.fallback())
+        }
+    }
+
+    private func run<Value: Codable, Output: Codable>(
+        _ value: Value,
+        success: Bool = true,
+        error: String = "",
+        inputSummary: String = "fake",
+        outputSummary: String = "fake"
+    ) -> AIRun<Output> {
+        guard let result = value as? Output else {
+            fatalError("FakeAIClient returned \(Value.self) for \(Output.self)")
+        }
+        return AIRun(
+            result: result,
+            elapsedMS: 1,
+            success: success,
+            error: error,
+            inputSummary: inputSummary,
+            outputSummary: outputSummary
+        )
+    }
+}
+
+/// 按 `endpoint` 精确控制每一步成败的假执行器，用于验证 AgentDraftCoordinator 的熔断行为。
+private final class ScriptedAgentExecutor: AIWorkflowExecuting {
+    struct StepResult {
+        var success: Bool = true
+        var error: String = ""
+    }
+
+    private(set) var callCounts: [String: Int] = [:]
+    var results: [String: StepResult] = [:]
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        callCounts[descriptor.endpoint, default: 0] += 1
+        let outcome = results[descriptor.endpoint] ?? StepResult()
+        return AIRun(
+            result: descriptor.fallback(),
+            elapsedMS: 1,
+            success: outcome.success,
+            error: outcome.error,
+            inputSummary: "fake",
+            outputSummary: "fake"
+        )
+    }
+}
+
+/// 按序脚本化 `agent-decision-native` 端点的返回内容，其余端点原样走 fallback；
+/// 用于驱动 WritingAgentCoordinator 在 Store 层的 ask_author 暂停/续跑状态流转（PRD 23.6.5）。
+private final class DecisionScriptedExecutor: AIWorkflowExecuting {
+    private(set) var callCounts: [String: Int] = [:]
+    var decisions: [AgentDecisionResult] = [] {
+        didSet { cursor = 0 }
+    }
+    private var cursor = 0
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        callCounts[descriptor.endpoint, default: 0] += 1
+        if descriptor.endpoint == "agent-decision-native", cursor < decisions.count, let result = decisions[cursor] as? Output {
+            cursor += 1
+            return AIRun(result: result, elapsedMS: 1, success: true, error: "", inputSummary: "fake", outputSummary: "fake")
+        }
+        return AIRun(result: descriptor.fallback(), elapsedMS: 1, success: true, error: "", inputSummary: "fake", outputSummary: "fake")
+    }
+}
+
+/// 每次调用都先等待固定延时再返回本地兜底结果，用于给取消操作留出可命中的窗口。
+private final class SlowFakeAIClient: AIWorkflowExecuting {
+    private let delayNanoseconds: UInt64
+
+    init(delayNanoseconds: UInt64) {
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        try? await Task.sleep(nanoseconds: delayNanoseconds)
+        return AIRun(
+            result: descriptor.fallback(),
+            elapsedMS: 1,
+            success: true,
+            error: "",
+            inputSummary: "fake",
+            outputSummary: "fake"
+        )
+    }
+}
