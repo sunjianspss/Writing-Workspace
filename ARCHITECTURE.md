@@ -1,6 +1,6 @@
 # 创作工坊架构说明
 
-更新日期：2026-07-01
+更新日期：2026-07-07
 
 ## 架构定位
 
@@ -41,7 +41,9 @@ macOS / SwiftUI App
 | 发布物料 | `publish_assets` + Inspector | 摘要、封面文案、朋友圈文案、标签、小红书版本、封面图提示词 |
 | Keychain | `KeychainCredentialStore.swift` | API Key 安全存储 |
 | 运行脚本 | `script/build_and_run.sh` | 构建并启动 `.app` |
-| 写作质量评测 | `macos/CreativeWorkshopMac/Sources/CreativeWorkshopEval` + `evals/` | 独立 CLI，跑 direct/agent/deep 三条管线并打分（PRD 22.4.2） |
+| 写作质量评测 | `macos/CreativeWorkshopMac/Sources/CreativeWorkshopEval` + `evals/` | 独立 CLI，跑 direct/agent/deep/agentic 四条管线，锚点评分 + 放行门判定（PRD 22.4.2 / 23.4） |
+| 半自动调度 | `AdvisorPlanRunner.swift` + `agent_runs` | 按"智能下一步"计划顺序执行动作，待复核处暂停（PRD 23.5，L1.5） |
+| 代理会话（实验室） | `WritingAgentCoordinator.swift` + `agent_lab_enabled` / `agent_call_budget` | L2 有界决策循环：模型选动作、护栏管预算与熔断，产物进待复核；默认关闭，评测放行门达标才转默认（PRD 23.6） |
 
 ## SwiftPM 模块划分
 
