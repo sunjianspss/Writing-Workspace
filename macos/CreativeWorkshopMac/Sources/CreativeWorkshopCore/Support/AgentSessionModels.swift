@@ -63,9 +63,12 @@ package enum AgentSessionAction: String, CaseIterable, Codable, Hashable {
         case .searchMaterials:
             return state.searchCount < 4
         case .askAuthor:
-            return !state.askAuthorUsed
+            // 无头评测没有作者可问（第二轮评测修缮）：allowAskAuthor=false 时该动作整体下架。
+            return state.allowAskAuthor && !state.askAuthorUsed
         case .finish:
-            return true
+            // "不空手"收紧（第二轮评测修缮，取代 23.6.2 的"恒可用"）：正文为空时 finish 不可选，
+            // 模型必须先产出内容或（在允许时）ask_author；预算耗尽等停机路径不受影响。
+            return !state.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -109,6 +112,8 @@ package struct AgentSessionState {
     package var usedCalls: Int = 0
 
     package var askAuthorUsed: Bool = false
+    /// 无头评测置 false（第二轮评测修缮）：ask_author 从可用动作清单整体移除。
+    package var allowAskAuthor: Bool = true
     package var lastAction: AgentSessionAction?
     package var lastActionRepeatCount: Int = 0
     package var lastStateHash: Int?

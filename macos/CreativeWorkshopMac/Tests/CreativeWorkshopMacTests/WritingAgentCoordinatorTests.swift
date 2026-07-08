@@ -169,7 +169,8 @@ final class WritingAgentCoordinatorTests: XCTestCase {
         ]
         let coordinator = WritingAgentCoordinator(executor: executor)
 
-        let result = await coordinator.run(input: Self.makeInput(fragmentCorpus: Self.makeFragmentCorpus()))
+        // finish 前置收紧（"不空手"）后需要非空正文才能收尾，检索语义本身与正文无关。
+        let result = await coordinator.run(input: Self.makeInput(content: "已有一版正文，可支撑 finish 前置。", fragmentCorpus: Self.makeFragmentCorpus()))
 
         XCTAssertEqual(result.stopReason, .finished)
         XCTAssertEqual(result.finalState.searchCount, 1)
@@ -189,7 +190,7 @@ final class WritingAgentCoordinatorTests: XCTestCase {
         ]
         let coordinator = WritingAgentCoordinator(executor: executor)
 
-        let result = await coordinator.run(input: Self.makeInput(fragmentCorpus: Self.makeFragmentCorpus()))
+        let result = await coordinator.run(input: Self.makeInput(content: "已有一版正文，可支撑 finish 前置。", fragmentCorpus: Self.makeFragmentCorpus()))
 
         XCTAssertEqual(result.stopReason, .finished, "重复 query 应被拒绝而非让会话熔断")
         XCTAssertEqual(result.finalState.searchCount, 1, "第二次同 query 检索不应计入检索次数")
@@ -198,6 +199,43 @@ final class WritingAgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(searchSteps.count, 2)
         XCTAssertEqual(searchSteps.last?.status, "fallback")
         XCTAssertTrue(searchSteps.last?.output_summary.contains("已检索过") == true)
+    }
+
+    /// 第二轮评测修缮：无头评测移除 ask_author——allowAskAuthor=false 时该动作整体下架，
+    /// 模型执意选择时走越界纠正，仍越界则安全停机（而不是以 askAuthor 收尾）。
+    func testHeadlessSessionRejectsAskAuthorViaCorrectionFlow() async {
+        let executor = ScriptedAgentExecutor()
+        executor.decisions = [
+            .json(AgentDecisionResult(action: AgentSessionAction.askAuthor.rawValue, arguments: AgentDecisionArguments(query: "想问作者"), reason: "缺证据", stop: false)),
+            .json(AgentDecisionResult(action: AgentSessionAction.askAuthor.rawValue, arguments: AgentDecisionArguments(query: "还是想问"), reason: "缺证据", stop: false))
+        ]
+        let coordinator = WritingAgentCoordinator(executor: executor)
+        var input = Self.makeInput()
+        input.allowAskAuthor = false
+
+        let result = await coordinator.run(input: input)
+
+        XCTAssertEqual(result.stopReason, .invalidDecision)
+        XCTAssertNil(result.askAuthorQuestions)
+        XCTAssertFalse(result.finalState.availableActions.contains(.askAuthor))
+    }
+
+    /// 第二轮评测修缮："不空手"——正文为空时 finish 不可选（取代 23.6.2 的"恒可用"），
+    /// 空交付得 0 分的路径从源头堵死。
+    func testFinishRequiresNonEmptyContent() async {
+        var emptyState = AgentSessionState(idea: "一个想法", direction: "情感文学", materials: "", style: Self.makeStyle(), callBudget: 12)
+        XCTAssertFalse(emptyState.availableActions.contains(.finish), "正文为空时 finish 应不可选")
+        emptyState.content = "已经有一段正文了。"
+        XCTAssertTrue(emptyState.availableActions.contains(.finish))
+
+        let executor = ScriptedAgentExecutor()
+        executor.decisions = [
+            .json(AgentDecisionResult(action: AgentSessionAction.finish.rawValue, reason: "想直接结束", stop: true)),
+            .json(AgentDecisionResult(action: AgentSessionAction.finish.rawValue, reason: "还是想结束", stop: true))
+        ]
+        let coordinator = WritingAgentCoordinator(executor: executor)
+        let result = await coordinator.run(input: Self.makeInput())
+        XCTAssertEqual(result.stopReason, .invalidDecision, "正文为空时执意 finish 应纠正后安全停机，而非空交付")
     }
 
     /// 每会话检索上限 4 次：第 5 次发起 search_materials 时前置条件已不满足，进入越界纠正流程后安全停机。

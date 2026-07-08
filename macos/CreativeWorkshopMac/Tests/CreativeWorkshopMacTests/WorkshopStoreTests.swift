@@ -42,12 +42,17 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(askAuthor.questions, ["需要更多关于XX的素材"])
         XCTAssertNil(store.pendingDraftReview, "暂停阶段不应交付待复核")
 
-        executor.decisions = [AgentDecisionResult(action: "finish", reason: "已经足够", stop: true)]
+        // finish 前置收紧（"不空手"）：正文为空时不能直接 finish，续跑脚本先产出一版正文再收尾。
+        executor.decisions = [
+            AgentDecisionResult(action: "agent_quick_draft", reason: "先出一版正文", stop: false),
+            AgentDecisionResult(action: "finish", reason: "已经足够", stop: true)
+        ]
         await store.resumeAgentSession()
 
         XCTAssertNil(store.agentSessionAskAuthor, "续跑完成后提问卡应清空")
         let pending = try XCTUnwrap(store.pendingDraftReview, "finish 应把最终稿交付待复核")
-        XCTAssertEqual(pending.agentSessionSummary?.first, "共 1 步，停止原因：模型判断可以结束会话")
+        XCTAssertFalse(pending.after.content.isEmpty, "交付不得空手")
+        XCTAssertEqual(pending.agentSessionSummary?.first, "共 7 步，停止原因：模型判断可以结束会话")
     }
 
     /// 「就此结束」路径：不再消耗模型调用，直接按 finish 语义交付暂停时的最好版本。

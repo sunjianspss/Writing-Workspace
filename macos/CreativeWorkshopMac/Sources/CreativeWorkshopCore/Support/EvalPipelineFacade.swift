@@ -220,7 +220,8 @@ package struct EvalPipelineFacade {
     }
 
     /// 23.6 有界代理循环管线：无头跑 WritingAgentCoordinator，供放行门（23.4）与 deep 对照。
-    /// ask_author 在评测里没有作者可问，视为 finish 处理（任务 14 明确约定）。
+    /// 第二轮评测修缮：无头环境没有作者可问，ask_author 从动作空间整体移除
+    /// （首轮曾有半数会话以 ask_author 收尾、一例交付空正文得 0 分）。
     private func runAgentic(_ evalCase: EvalCaseInput, style: StyleProfile) async throws -> EvalPipelineOutcome {
         let input = WritingAgentSessionInput(
             idea: evalCase.idea,
@@ -230,7 +231,8 @@ package struct EvalPipelineFacade {
             content: evalCase.content,
             config: config,
             apiKey: apiKey,
-            callBudget: (try? database.agentCallBudget()) ?? 12
+            callBudget: (try? database.agentCallBudget()) ?? 12,
+            allowAskAuthor: false
         )
         let session = await WritingAgentCoordinator(executor: executor).run(input: input)
         let circuitBreakFallback: Int

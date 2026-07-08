@@ -20,6 +20,8 @@ package struct WritingAgentSessionInput {
     package var outlineTemplate: PromptTemplate?
     /// search_materials 动作的本地检索语料（任务 16）；本协调器不接触数据库，语料由调用方一次性传入。
     package var fragmentCorpus: [Fragment]
+    /// 无头评测置 false（第二轮评测修缮）：评测环境没有作者可问，ask_author 从动作空间移除。
+    package var allowAskAuthor: Bool
 
     package init(
         idea: String,
@@ -38,7 +40,8 @@ package struct WritingAgentSessionInput {
         polishTemplate: PromptTemplate? = nil,
         draftTemplate: PromptTemplate? = nil,
         outlineTemplate: PromptTemplate? = nil,
-        fragmentCorpus: [Fragment] = []
+        fragmentCorpus: [Fragment] = [],
+        allowAskAuthor: Bool = true
     ) {
         self.idea = idea
         self.direction = direction
@@ -57,6 +60,7 @@ package struct WritingAgentSessionInput {
         self.draftTemplate = draftTemplate
         self.outlineTemplate = outlineTemplate
         self.fragmentCorpus = fragmentCorpus
+        self.allowAskAuthor = allowAskAuthor
     }
 }
 
@@ -100,7 +104,7 @@ package struct WritingAgentCoordinator {
             )
         }
 
-        let state = AgentSessionState(
+        var state = AgentSessionState(
             idea: input.idea,
             direction: input.direction,
             materials: input.materials,
@@ -111,6 +115,7 @@ package struct WritingAgentCoordinator {
             outline: input.outline,
             callBudget: input.callBudget
         )
+        state.allowAskAuthor = input.allowAskAuthor
         return await runLoop(state: state, before: before, input: input, onStep: onStep)
     }
 
