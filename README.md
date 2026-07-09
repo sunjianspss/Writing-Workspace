@@ -60,7 +60,7 @@
 ./script/build_and_run.sh --verify
 ```
 
-原生端单元测试：
+本地终端跑原生端单元测试：
 
 ```bash
 env SWIFTPM_CONFIG_PATH="$PWD/.swiftpm-state/config" \
