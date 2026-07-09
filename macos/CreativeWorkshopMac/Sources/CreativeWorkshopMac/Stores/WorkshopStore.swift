@@ -378,9 +378,6 @@ final class WorkshopStore: ObservableObject {
                 self.editStyleProfile(self.styleProfiles.first)
             }
 
-            if self.selectedArticleID == nil {
-                self.openArticle(self.filteredArticles.first ?? self.articles.first)
-            }
             if self.selectedTopicID == nil {
                 self.selectedTopicID = self.topics.first?.id
             }
