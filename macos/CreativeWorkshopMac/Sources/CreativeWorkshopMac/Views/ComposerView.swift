@@ -72,7 +72,7 @@ struct ComposerView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(width: 260)
+        .frame(width: 360)
         .controlSize(.small)
     }
 
@@ -83,7 +83,20 @@ struct ComposerView: View {
             processSection
         case .article:
             articleEditorSection
+        case .community:
+            communitySection
         }
+    }
+
+    private var communitySection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                PublishAssetsCard(store: store)
+            }
+            .padding(.bottom, 18)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
     }
 
     private var processSection: some View {
@@ -1174,6 +1187,7 @@ struct ComposerView: View {
 private enum ComposerTab: String, CaseIterable, Identifiable {
     case process
     case article
+    case community
 
     var id: String { rawValue }
 
@@ -1183,6 +1197,8 @@ private enum ComposerTab: String, CaseIterable, Identifiable {
             return "写作过程"
         case .article:
             return "文章编辑"
+        case .community:
+            return "社群发布"
         }
     }
 
@@ -1192,6 +1208,79 @@ private enum ComposerTab: String, CaseIterable, Identifiable {
             return "sparkles"
         case .article:
             return "doc.text"
+        case .community:
+            return "megaphone"
+        }
+    }
+}
+
+private struct PublishAssetsCard: View {
+    @ObservedObject var store: WorkshopStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("发布物料")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await store.generatePublishAssets() }
+                } label: {
+                    Label("生成", systemImage: "square.and.arrow.up")
+                }
+                .controlSize(.small)
+                .disabled(!store.canGeneratePublishAssets)
+            }
+
+            if let assets = store.latestPublishAssets {
+                assetRow("摘要", assets.summary)
+                assetRow("封面文案", assets.cover_text)
+                assetRow("朋友圈", assets.moments_text)
+                if !assets.tags.isEmpty {
+                    assetRow("标签", assets.tags.joined(separator: "，"))
+                }
+                assetRow("小红书", assets.xiaohongshu_text)
+                assetRow("封面图提示词", assets.cover_image_prompt)
+                if let rawOutput = assets.raw_output,
+                   !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    DisclosureGroup("模型原始物料") {
+                        Text(rawOutput)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else {
+                Text("文章成稿后可以生成摘要、封面文案、朋友圈文案、标签和小红书版本。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func assetRow(_ title: String, _ value: String?) -> some View {
+        Group {
+            if let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(title)
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        Button("复制") {
+                            store.copyToClipboard(value)
+                        }
+                        .controlSize(.mini)
+                    }
+                    Text(value)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }

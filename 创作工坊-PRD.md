@@ -638,7 +638,7 @@ AI 的职责是提出选项、组织结构、给出反馈和辅助修改。最�
 5. 生成小红书版本。
 6. 生成封面图提示词。
 7. 保存到本地 `publish_assets` 表。
-8. 在右侧 Inspector 展示并支持单项复制。
+8. 在工作区「社群发布」页签展示并支持单项复制。
 
 
 
@@ -655,6 +655,8 @@ AI 的职责是提出选项、组织结构、给出反馈和辅助修改。最�
 2. 文案保持作者语气。
 3. 不硬广，不标题党。
 4. 能从当前标题、摘要、正文生成。
+
+**实施记录**（2026-07-09）：发布物料卡片（`PublishAssetsCard`）从右侧 Inspector 的「发布」页签移出，改为 `ComposerView` 与"写作过程"/"文章编辑"平级的第三个页签"社群发布"（`ComposerTab.community`）。原因：发布物料只在成稿后才需要看，常驻右侧栏挤占空间；移出后 Inspector「发布」页签保留发表前终审、编辑指标、改稿版本三张卡片。改动集中在 `ComposerView.swift`（新增 `communitySection`、`ComposerTab.community`、`PublishAssetsCard` 结构体迁入，分段控件宽度 260→360 以容纳三个页签）和 `InspectorView.swift`（删除该卡片调用与定义），未涉及 Store/数据层。
 
 
 
