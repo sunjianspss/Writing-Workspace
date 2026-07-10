@@ -214,8 +214,7 @@ struct ComposerView: View {
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 6) {
                             fieldCaption("写作方向")
-                            TextField("例如：情感文学", text: $store.writingDirection)
-                                .textFieldStyle(.roundedBorder)
+                            directionField
                         }
                         .frame(width: 220)
 
@@ -225,8 +224,7 @@ struct ComposerView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 6) {
                             fieldCaption("写作方向")
-                            TextField("例如：情感文学", text: $store.writingDirection)
-                                .textFieldStyle(.roundedBorder)
+                            directionField
                         }
                         processIdeaEditor
                     }
@@ -257,6 +255,27 @@ struct ComposerView: View {
                 }
                 .controlSize(.regular)
             }
+        }
+    }
+
+    /// 写作方向：可直接输入，也可从已有体裁中选（保证与风格档案、同体裁样本的匹配键一致）。
+    private var directionField: some View {
+        HStack(spacing: 6) {
+            TextField("例如：情感文学", text: $store.writingDirection)
+                .textFieldStyle(.roundedBorder)
+            Menu {
+                ForEach(store.knownDirections, id: \.self) { direction in
+                    Button(direction) {
+                        store.writingDirection = direction
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.up.chevron.down")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("从已有体裁中选择，保证与风格档案和同体裁样本精确匹配；也可直接输入新体裁。")
         }
     }
 

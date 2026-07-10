@@ -841,6 +841,27 @@ final class WorkshopStoreTests: XCTestCase {
         return try XCTUnwrap(inputSummary.components(separatedBy: "\n---\n").first)
     }
 
+    /// 写作方向下拉候选：风格档案体裁在前，文章体裁按出现顺序补充，内置项兜底，全程去重去空白。
+    func testKnownDirectionsDeduplicatesProfileArticleAndBuiltinGenres() throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+
+        store.styleProfiles = [
+            StyleProfile(id: 1, name: "情感", genre: "情感文学"),
+            StyleProfile(id: 2, name: "解读", genre: "文学原著")
+        ]
+        store.articles = [
+            Article(id: 1, genre: "文学原著"),
+            Article(id: 2, genre: " 科研技术 "),
+            Article(id: 3, genre: nil)
+        ]
+
+        XCTAssertEqual(
+            store.knownDirections,
+            ["情感文学", "文学原著", "科研技术", "原著解读", "技术分享"]
+        )
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)

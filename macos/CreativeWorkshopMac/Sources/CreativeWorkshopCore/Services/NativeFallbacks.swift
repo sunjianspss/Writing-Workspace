@@ -59,7 +59,7 @@ package enum NativeFallbacks {
                 WritingBriefSection(
                     heading: "展开与回收",
                     purpose: "补充例子、边界和余味。",
-                    key_points: ["补一个例子", "说明边界", "结尾回到个人经验"],
+                    key_points: ["补一个例子", "说明边界", "结尾回到核心观点或原文"],
                     material_hint: "如果素材不足，保留空白感，不硬编事实"
                 )
             ],
@@ -71,7 +71,7 @@ package enum NativeFallbacks {
 
     package static func argumentCheck(brief: WritingBriefResult, materials: String) -> ArgumentCheckResult {
         ArgumentCheckResult(
-            thesis_strength: "主张可以成立，但必须依靠具体场景和个人经验支撑。",
+            thesis_strength: "主张可以成立，但必须依靠具体场景和可靠证据支撑。",
             weak_points: [
                 "如果只围绕「\(brief.thesis ?? "核心主张")」展开，容易变成抽象议论。",
                 "素材不足时，中段最容易松散。"
@@ -229,7 +229,7 @@ package enum NativeFallbacks {
                 OutlineSection(
                     heading: "再解释真正值得写的部分",
                     points: ["用一句话说清核心观点", "拆成几个具体场景", "避免空泛抒情"],
-                    material_hint: "可插入生活例子或个人经历"
+                    material_hint: "可插入与体裁匹配的例子或素材"
                 ),
                 OutlineSection(
                     heading: "最后讲它的边界",
@@ -373,7 +373,7 @@ package enum NativeFallbacks {
                 severity: "中",
                 excerpt: nil,
                 problem: "段落层次还不够清楚，读者可能难以感到文章在推进。",
-                suggestion: "把文章拆成开头、核心观察、展开论证、回到个人经验、结尾五个部分。"
+                suggestion: "把文章拆成开头、核心观察、展开论证、呼应核心观点、结尾五个部分。"
             ))
             trainingFocus.append("训练段落推进：每一段只承担一个功能。")
         }
@@ -647,7 +647,7 @@ package enum NativeFallbacks {
                     "再生成选题，筛出最有个人表达空间的一条。",
                     "选定选题后再进入大纲。"
                 ],
-                risk_notes: ["此时直接生成正文，最容易得到没有个人经验支撑的空泛文章。"],
+                risk_notes: ["此时直接生成正文，最容易得到没有具体素材支撑的空泛文章。"],
                 raw_output: nil
             )
         }

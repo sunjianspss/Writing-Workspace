@@ -58,6 +58,44 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertEqual(try database.overviewStats().article_total, 1)
     }
 
+    func testDeleteTopicRemovesRow() throws {
+        let database = try makeDatabase()
+
+        let topics = try database.createTopics([
+            TopicPayload(
+                title: "要删除的选题",
+                direction: nil,
+                core_viewpoint: nil,
+                target_reader: nil,
+                description: nil,
+                angle: nil,
+                emotion: nil,
+                score: nil,
+                status: "待写",
+                tags: nil
+            ),
+            TopicPayload(
+                title: "保留的选题",
+                direction: nil,
+                core_viewpoint: nil,
+                target_reader: nil,
+                description: nil,
+                angle: nil,
+                emotion: nil,
+                score: nil,
+                status: "待写",
+                tags: nil
+            )
+        ])
+        XCTAssertEqual(try database.listTopics().count, 2)
+
+        try database.deleteTopic(id: topics[0].id)
+
+        let remaining = try database.listTopics()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.title, "保留的选题")
+    }
+
     func testArticleStatusFilterAndArchive() throws {
         let database = try makeDatabase()
         let article = try database.saveArticle(
@@ -803,6 +841,34 @@ final class NativeDatabaseTests: XCTestCase {
 
         XCTAssertEqual(updated.name, "自定义全文润色")
         XCTAssertEqual(try database.promptTemplate(key: .polishDraft)?.system_prompt, "系统提示")
+    }
+
+    func testSeedRefreshKeepsCustomizedTemplateAndUpdatesDefaults() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "creative_workshop.sqlite3")
+
+        let first = try NativeDatabase(databaseURL: url)
+        let polish = try XCTUnwrap(try first.promptTemplate(key: .polishDraft))
+        _ = try first.savePromptTemplate(
+            id: polish.id,
+            name: "自定义全文润色",
+            systemPrompt: "系统提示",
+            userTemplate: "用户模板 {{content}}"
+        )
+
+        let reopened = try NativeDatabase(databaseURL: url)
+        let customized = try XCTUnwrap(try reopened.promptTemplate(key: .polishDraft))
+        XCTAssertEqual(customized.user_template, "用户模板 {{content}}")
+        XCTAssertEqual(customized.is_default, 0)
+
+        let seed = try XCTUnwrap(
+            NativePrompts.defaultPromptTemplates().first { $0.key == .writingReview }
+        )
+        let untouched = try XCTUnwrap(try reopened.promptTemplate(key: .writingReview))
+        XCTAssertEqual(untouched.user_template, seed.user_template)
+        XCTAssertEqual(untouched.is_default, 1)
     }
 
     private func makeDatabase() throws -> NativeDatabase {

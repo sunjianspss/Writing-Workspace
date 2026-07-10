@@ -28,7 +28,7 @@ struct ContentView: View {
 
                 if shouldShowInspector {
                     InspectorView(store: store)
-                        .frame(minWidth: 210, idealWidth: 240, maxWidth: 280)
+                        .frame(minWidth: 210, idealWidth: 240, maxWidth: 364)
                 }
             }
         }
@@ -39,7 +39,9 @@ struct ContentView: View {
         switch selectedSidebarItem {
         case .materials:
             MaterialsView(store: store)
-        case .articles, .topics:
+        case .topics:
+            TopicsView(store: store, sidebarSelection: $selectedSidebarItem)
+        case .articles:
             ComposerView(store: store, isInspectorVisible: $isInspectorVisible)
         }
     }

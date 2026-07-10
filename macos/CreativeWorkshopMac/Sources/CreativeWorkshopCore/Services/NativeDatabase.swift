@@ -316,7 +316,7 @@ package final class NativeDatabase {
         try execute(
             """
             UPDATE prompt_templates
-            SET name = ?, system_prompt = ?, user_template = ?, updated_at = ?
+            SET name = ?, system_prompt = ?, user_template = ?, is_default = 0, updated_at = ?
             WHERE id = ?
             """,
             [name, systemPrompt, userTemplate, utcNow(), id]
@@ -434,6 +434,10 @@ package final class NativeDatabase {
 
     package func deleteIdea(id: Int) throws {
         try execute("DELETE FROM ideas WHERE id = ?", [id])
+    }
+
+    package func deleteTopic(id: Int) throws {
+        try execute("DELETE FROM topics WHERE id = ?", [id])
     }
 
     package func createTopics(_ payloads: [TopicPayload]) throws -> [Topic] {
@@ -1373,22 +1377,39 @@ package final class NativeDatabase {
     private func seedPromptTemplatesIfNeeded() throws {
         let existingKeys = Set(try rows("SELECT key FROM prompt_templates", mapper: { text($0, 0) ?? "" }))
         let now = utcNow()
-        for template in NativePrompts.defaultPromptTemplates() where !existingKeys.contains(template.key.rawValue) {
-            try execute(
-                """
-                INSERT INTO prompt_templates
-                    (key, name, system_prompt, user_template, is_default, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?)
-                """,
-                [
-                    template.key.rawValue,
-                    template.name,
-                    template.system_prompt,
-                    template.user_template,
-                    now,
-                    now
-                ]
-            )
+        for template in NativePrompts.defaultPromptTemplates() {
+            if existingKeys.contains(template.key.rawValue) {
+                // 内置默认模板随版本更新：只刷新用户从未保存过的行（保存会置 is_default = 0 并推进 updated_at）
+                try execute(
+                    """
+                    UPDATE prompt_templates
+                    SET name = ?, system_prompt = ?, user_template = ?
+                    WHERE key = ? AND is_default = 1 AND updated_at = created_at
+                    """,
+                    [
+                        template.name,
+                        template.system_prompt,
+                        template.user_template,
+                        template.key.rawValue
+                    ]
+                )
+            } else {
+                try execute(
+                    """
+                    INSERT INTO prompt_templates
+                        (key, name, system_prompt, user_template, is_default, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    [
+                        template.key.rawValue,
+                        template.name,
+                        template.system_prompt,
+                        template.user_template,
+                        now,
+                        now
+                    ]
+                )
+            }
         }
     }
 

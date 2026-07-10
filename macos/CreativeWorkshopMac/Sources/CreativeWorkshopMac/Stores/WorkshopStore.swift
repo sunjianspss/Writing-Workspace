@@ -19,7 +19,7 @@ final class WorkshopStore: ObservableObject {
     @Published var contentSelection: NSRange = NSRange(location: 0, length: 0)
     @Published var outline: String = ""
     @Published var ideaInput: String = ""
-    @Published var writingDirection: String = "情感文学"
+    @Published var writingDirection: String = ""
     @Published var materials: String = ""
     @Published var statusText: String = "准备就绪"
     @Published var isLoading: Bool = false
@@ -932,6 +932,18 @@ final class WorkshopStore: ObservableObject {
         }
         if outline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             outline = defaultOutline(for: topic)
+        }
+    }
+
+    func deleteTopic(_ topic: Topic) async {
+        await run("删除选题") {
+            try self.database.deleteTopic(id: topic.id)
+            if self.selectedTopicID == topic.id {
+                self.selectedTopicID = nil
+            }
+            self.topics = try self.database.listTopics()
+            self.stats = try self.database.overviewStats()
+            self.statusText = "选题「\(topic.title)」已删除"
         }
     }
 
@@ -2286,9 +2298,26 @@ final class WorkshopStore: ObservableObject {
         return text
     }
 
+    /// 不再静默兜底为固定体裁：方向为空时保持为空，由提示词按正文自行判断体裁。
     var normalizedDirection: String {
-        let value = writingDirection.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? "情感文学" : value
+        writingDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 写作方向下拉候选：风格档案体裁 + 已有文章体裁 + 内置常用项，按出现顺序去重。
+    /// 选已有项可保证与风格档案匹配（18.3.4）和同体裁样本抽取的键完全一致。
+    var knownDirections: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        let candidates = styleProfiles.compactMap(\.genre)
+            + articles.compactMap(\.genre)
+            + ["情感文学", "原著解读", "技术分享"]
+        for candidate in candidates {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, seen.insert(trimmed).inserted {
+                result.append(trimmed)
+            }
+        }
+        return result
     }
 
     private var reviewableText: String {
@@ -2316,6 +2345,11 @@ final class WorkshopStore: ObservableObject {
             ideas: ideas
         )
         context.learned_preferences = (style.learned_preferences ?? []).map(\.description)
+        // 体裁优先取当前文章自己的 genre（诊断/建议按篇适配），风格档案的体裁只作兜底。
+        if let articleGenre = selectedArticle?.genre?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !articleGenre.isEmpty {
+            context.genre = articleGenre
+        }
         return context
     }
 
