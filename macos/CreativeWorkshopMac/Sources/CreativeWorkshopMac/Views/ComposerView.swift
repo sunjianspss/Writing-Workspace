@@ -92,7 +92,9 @@ struct ComposerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 PublishAssetsCard(store: store)
+                    .frame(maxWidth: 1_060, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(.bottom, 18)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1216,71 +1218,614 @@ private enum ComposerTab: String, CaseIterable, Identifiable {
 
 private struct PublishAssetsCard: View {
     @ObservedObject var store: WorkshopStore
+    @State private var selectedChannel: PublishChannel = .xiaohongshu
+    @State private var copiedAssetID: String?
+    @State private var isPromptExpanded = true
+    @State private var isRawOutputExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("发布物料")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    Task { await store.generatePublishAssets() }
-                } label: {
-                    Label("生成", systemImage: "square.and.arrow.up")
-                }
-                .controlSize(.small)
-                .disabled(!store.canGeneratePublishAssets)
-            }
+        let assets = store.latestPublishAssets
+        let hasAssets = assets.map(hasUsableContent) ?? false
 
-            if let assets = store.latestPublishAssets {
-                assetRow("摘要", assets.summary)
-                assetRow("封面文案", assets.cover_text)
-                assetRow("朋友圈", assets.moments_text)
-                if !assets.tags.isEmpty {
-                    assetRow("标签", assets.tags.joined(separator: "，"))
-                }
-                assetRow("小红书", assets.xiaohongshu_text)
-                assetRow("封面图提示词", assets.cover_image_prompt)
-                if let rawOutput = assets.raw_output,
-                   !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    DisclosureGroup("模型原始物料") {
-                        Text(rawOutput)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+        return VStack(alignment: .leading, spacing: 16) {
+            publicationHeader(hasAssets: hasAssets)
+
+            if let assets, hasAssets {
+                publishWorkbench(assets)
+                promptPanel(assets)
+                rawOutputPanel(assets)
             } else {
-                Text("文章成稿后可以生成摘要、封面文案、朋友圈文案、标签和小红书版本。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                emptyState
+                if let assets {
+                    rawOutputPanel(assets)
+                }
             }
         }
-        .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .onAppear {
+            selectPreferredChannel()
+        }
+        .onChange(of: store.latestPublishAssets?.id) { _ in
+            selectPreferredChannel()
+        }
     }
 
-    private func assetRow(_ title: String, _ value: String?) -> some View {
-        Group {
-            if let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(title)
-                            .font(.caption.weight(.semibold))
-                        Spacer()
-                        Button("复制") {
-                            store.copyToClipboard(value)
-                        }
-                        .controlSize(.mini)
+    private func publicationHeader(hasAssets: Bool) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 14) {
+                publicationIdentity(hasAssets: hasAssets)
+                Spacer(minLength: 20)
+                generateButton(hasAssets: hasAssets)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                publicationIdentity(hasAssets: hasAssets)
+                generateButton(hasAssets: hasAssets)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func publicationIdentity(hasAssets: Bool) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "megaphone")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 40, height: 40)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("社群发布")
+                    .font(.title3.weight(.semibold))
+
+                Text("为不同渠道准备内容，快速预览并一键复制发布。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                HStack(spacing: 5) {
+                    Image(systemName: hasAssets ? "checkmark.circle" : "clock")
+                    Text(hasAssets ? "已有发布物料" : "等待生成发布物料")
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(hasAssets ? Color.accentColor : Color.secondary)
+            }
+        }
+    }
+
+    private func generateButton(hasAssets: Bool) -> some View {
+        Button {
+            Task { await store.generatePublishAssets() }
+        } label: {
+            if isGeneratingAssets {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("生成中")
+                }
+            } else {
+                Label(hasAssets ? "重新生成" : "生成发布物料", systemImage: "arrow.triangle.2.circlepath")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.regular)
+        .disabled(!store.canGeneratePublishAssets)
+        .help(hasAssets ? "基于当前文章重新生成所有发布物料" : "基于当前文章生成发布物料")
+    }
+
+    private func publishWorkbench(_ assets: PublishAssets) -> some View {
+        PublishWorkbenchLayout(
+            supportColumnWidth: 300,
+            minimumChannelWidth: 380,
+            spacing: 14
+        ) {
+            supportingAssetsColumn(assets)
+            channelPanel(assets)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func supportingAssetsColumn(_ assets: PublishAssets) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            shortAssetPanel(
+                title: "摘要",
+                systemImage: "text.alignleft",
+                value: assets.summary,
+                assetID: "summary",
+                minimumHeight: 132
+            )
+
+            shortAssetPanel(
+                title: "封面文案",
+                systemImage: "character.cursor.ibeam",
+                value: assets.cover_text,
+                assetID: "cover-text",
+                minimumHeight: 108
+            )
+
+            tagsPanel(assets.tags)
+        }
+    }
+
+    private func shortAssetPanel(
+        title: String,
+        systemImage: String,
+        value: String?,
+        assetID: String,
+        minimumHeight: CGFloat
+    ) -> some View {
+        let content = trimmed(value)
+
+        return publishSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Label(title, systemImage: systemImage)
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    if let content {
+                        compactCopyButton(value: content, assetID: assetID, label: title)
                     }
-                    Text(value)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                }
+
+                if let content {
+                    Text(content)
+                        .font(.callout)
+                        .lineSpacing(4)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    missingContentLabel("暂未生成\(title)")
                 }
             }
+            .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .topLeading)
+        }
+    }
+
+    private func tagsPanel(_ tags: [String]) -> some View {
+        publishSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Label("标签", systemImage: "tag")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+
+                    if !tags.isEmpty {
+                        compactCopyButton(
+                            value: tags.joined(separator: "，"),
+                            assetID: "tags",
+                            label: "标签"
+                        )
+                    }
+                }
+
+                if tags.isEmpty {
+                    missingContentLabel("暂未生成标签")
+                } else {
+                    PublishTagFlowLayout(spacing: 7) {
+                        ForEach(Array(tags.enumerated()), id: \.offset) { _, tag in
+                            Text(tag)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 220, alignment: .leading)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
+                                .help(tag)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 126, alignment: .topLeading)
+        }
+    }
+
+    private func channelPanel(_ assets: PublishAssets) -> some View {
+        let channelText = trimmed(selectedChannel.value(in: assets))
+        let assetID = selectedChannel.rawValue
+
+        return publishSurface {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center, spacing: 18) {
+                    channelSelector
+                    Spacer(minLength: 12)
+                    Text(channelText.map { "\($0.count) 字" } ?? "暂无内容")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+                    .padding(.top, 12)
+
+                Group {
+                    if let channelText {
+                        Text(channelText)
+                            .font(.body)
+                            .lineSpacing(6)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        missingContentLabel("暂未生成\(selectedChannel.title)文案")
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 318, alignment: .topLeading)
+                .padding(.vertical, 16)
+
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button {
+                        if let channelText {
+                            copy(channelText, assetID: assetID)
+                        }
+                    } label: {
+                        Label(
+                            copiedAssetID == assetID ? "已复制正文" : "复制正文",
+                            systemImage: copiedAssetID == assetID ? "checkmark" : "doc.on.doc"
+                        )
+                        .frame(minWidth: 78)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .tint(copiedAssetID == assetID ? .green : .accentColor)
+                    .disabled(channelText == nil)
+                    .help("复制\(selectedChannel.title)文案")
+                }
+            }
+        }
+    }
+
+    private var channelSelector: some View {
+        HStack(spacing: 22) {
+            ForEach(PublishChannel.allCases) { channel in
+                Button {
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        selectedChannel = channel
+                    }
+                } label: {
+                    Text(channel.title)
+                        .font(.subheadline.weight(selectedChannel == channel ? .semibold : .regular))
+                        .foregroundStyle(selectedChannel == channel ? Color.accentColor : Color.secondary)
+                        .padding(.vertical, 2)
+                        .overlay(alignment: .bottom) {
+                            if selectedChannel == channel {
+                                Capsule()
+                                    .fill(Color.accentColor)
+                                    .frame(height: 2)
+                                    .offset(y: 9)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedChannel == channel ? .isSelected : [])
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func promptPanel(_ assets: PublishAssets) -> some View {
+        if let prompt = trimmed(assets.cover_image_prompt) {
+            publishSurface {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Label("封面图提示词", systemImage: "photo")
+                            .font(.subheadline.weight(.semibold))
+
+                        Spacer(minLength: 8)
+                        compactCopyButton(value: prompt, assetID: "cover-prompt", label: "封面图提示词")
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isPromptExpanded.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .rotationEffect(.degrees(isPromptExpanded ? 180 : 0))
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isPromptExpanded ? "收起封面图提示词" : "展开封面图提示词")
+                    }
+
+                    if isPromptExpanded {
+                        Text(prompt)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rawOutputPanel(_ assets: PublishAssets) -> some View {
+        if let rawOutput = trimmed(assets.raw_output) {
+            DisclosureGroup("模型原始物料", isExpanded: $isRawOutputExpanded) {
+                Text(rawOutput)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private var emptyState: some View {
+        publishSurface {
+            VStack(spacing: 14) {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 58, height: 58)
+                    .background(Color.accentColor.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
+
+                VStack(spacing: 6) {
+                    Text("把成稿变成可发布的内容")
+                        .font(.headline)
+                    Text("一次生成摘要、封面文案、朋友圈、小红书、标签和封面图提示词。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+            }
+            .frame(maxWidth: .infinity, minHeight: 330)
+        }
+    }
+
+    private func compactCopyButton(value: String, assetID: String, label: String) -> some View {
+        Button {
+            copy(value, assetID: assetID)
+        } label: {
+            Label(
+                copiedAssetID == assetID ? "已复制" : "复制",
+                systemImage: copiedAssetID == assetID ? "checkmark" : "doc.on.doc"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(copiedAssetID == assetID ? Color.green : Color.secondary)
+            .frame(width: 56, alignment: .trailing)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help("复制\(label)")
+        .accessibilityLabel(copiedAssetID == assetID ? "\(label)已复制" : "复制\(label)")
+    }
+
+    private func missingContentLabel(_ text: String) -> some View {
+        Label(text, systemImage: "minus.circle")
+            .font(.callout)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func publishSurface<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+            )
+    }
+
+    private var isGeneratingAssets: Bool {
+        store.isLoading && store.statusText.contains("生成发布物料")
+    }
+
+    private func hasUsableContent(_ assets: PublishAssets) -> Bool {
+        [
+            assets.summary,
+            assets.cover_text,
+            assets.moments_text,
+            assets.xiaohongshu_text,
+            assets.cover_image_prompt
+        ].contains { trimmed($0) != nil } || !assets.tags.isEmpty
+    }
+
+    private func selectPreferredChannel() {
+        guard let assets = store.latestPublishAssets else {
+            selectedChannel = .xiaohongshu
+            return
+        }
+
+        if trimmed(assets.xiaohongshu_text) != nil {
+            selectedChannel = .xiaohongshu
+        } else if trimmed(assets.moments_text) != nil {
+            selectedChannel = .moments
+        }
+    }
+
+    private func trimmed(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
+    }
+
+    private func copy(_ value: String, assetID: String) {
+        store.copyToClipboard(value)
+        withAnimation(.easeOut(duration: 0.16)) {
+            copiedAssetID = assetID
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            guard copiedAssetID == assetID else { return }
+            withAnimation(.easeIn(duration: 0.16)) {
+                copiedAssetID = nil
+            }
+        }
+    }
+}
+
+private enum PublishChannel: String, CaseIterable, Identifiable {
+    case xiaohongshu
+    case moments
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .xiaohongshu:
+            return "小红书"
+        case .moments:
+            return "朋友圈"
+        }
+    }
+
+    func value(in assets: PublishAssets) -> String? {
+        switch self {
+        case .xiaohongshu:
+            return assets.xiaohongshu_text
+        case .moments:
+            return assets.moments_text
+        }
+    }
+}
+
+private struct PublishWorkbenchLayout: Layout {
+    let supportColumnWidth: CGFloat
+    let minimumChannelWidth: CGFloat
+    let spacing: CGFloat
+
+    private var wideLayoutMinimumWidth: CGFloat {
+        supportColumnWidth + spacing + minimumChannelWidth
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+
+        let availableWidth = proposal.width ?? wideLayoutMinimumWidth
+        if availableWidth >= wideLayoutMinimumWidth {
+            let channelWidth = availableWidth - supportColumnWidth - spacing
+            let supportSize = subviews[0].sizeThatFits(
+                ProposedViewSize(width: supportColumnWidth, height: nil)
+            )
+            let channelSize = subviews[1].sizeThatFits(
+                ProposedViewSize(width: channelWidth, height: nil)
+            )
+            return CGSize(
+                width: availableWidth,
+                height: max(supportSize.height, channelSize.height)
+            )
+        }
+
+        let stackedProposal = ProposedViewSize(width: availableWidth, height: nil)
+        let supportSize = subviews[0].sizeThatFits(stackedProposal)
+        let channelSize = subviews[1].sizeThatFits(stackedProposal)
+        return CGSize(
+            width: availableWidth,
+            height: supportSize.height + spacing + channelSize.height
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count == 2 else { return }
+
+        if bounds.width >= wideLayoutMinimumWidth {
+            let channelWidth = bounds.width - supportColumnWidth - spacing
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: supportColumnWidth, height: nil)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX + supportColumnWidth + spacing, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: channelWidth, height: nil)
+            )
+            return
+        }
+
+        let stackedProposal = ProposedViewSize(width: bounds.width, height: nil)
+        let supportSize = subviews[0].sizeThatFits(stackedProposal)
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY),
+            anchor: .topLeading,
+            proposal: stackedProposal
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY + supportSize.height + spacing),
+            anchor: .topLeading,
+            proposal: stackedProposal
+        )
+    }
+}
+
+private struct PublishTagFlowLayout: Layout {
+    var spacing: CGFloat = 7
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let availableWidth = proposal.width ?? .greatestFiniteMagnitude
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var widestRow: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > 0, currentX + size.width > availableWidth {
+                widestRow = max(widestRow, currentX - spacing)
+                currentX = 0
+                currentY += rowHeight + spacing
+                rowHeight = 0
+            }
+
+            currentX += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        widestRow = max(widestRow, max(0, currentX - spacing))
+        let width = proposal.width ?? widestRow
+        return CGSize(width: width, height: currentY + rowHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var currentX = bounds.minX
+        var currentY = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > bounds.minX, currentX + size.width > bounds.maxX {
+                currentX = bounds.minX
+                currentY += rowHeight + spacing
+                rowHeight = 0
+            }
+
+            subview.place(
+                at: CGPoint(x: currentX, y: currentY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+            currentX += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
     }
 }
