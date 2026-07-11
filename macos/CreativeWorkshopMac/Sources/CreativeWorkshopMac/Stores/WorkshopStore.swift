@@ -103,12 +103,12 @@ final class WorkshopStore: ObservableObject {
     // MARK: - 19.3.1 自动保存与草稿恢复
     @Published var showAutosaveRestorePrompt: Bool = false
 
-    private let database: NativeDatabase
+    let database: NativeDatabase
     let aiClient: AIWorkflowExecuting
     private let contextBuilder: WritingContextBuilder
     private let keychain: KeychainCredentialStore
     /// 22.3.4：候选评委呈现顺序的随机源，可注入固定种子以便测试复现打乱结果。
-    private var candidateShuffleRNG: AnyRandomNumberGenerator
+    var candidateShuffleRNG: AnyRandomNumberGenerator
     private var draftTags: [String] = []
     private var isApplyingAutosaveSnapshot = false
     private var pendingAutosaveTask: Task<Void, Never>?
@@ -1205,172 +1205,6 @@ final class WorkshopStore: ObservableObject {
         }
     }
 
-    func generateDraftAlternatives() async {
-        guard canPolishDraft else {
-            statusText = "请先完成一版正文"
-            return
-        }
-        guard pendingDraftReview == nil else {
-            statusText = "还有未确认的生成结果，请先确认或放弃"
-            return
-        }
-
-        await run("生成多版本候选", cancellable: true) {
-            let style = try self.resolveStyle()
-            let base = self.currentDraftSnapshot()
-            let context = self.currentWritingContext(style: style)
-            let modes: [PolishMode] = [.natural, .tighten, .deepen]
-            var createdVersions: [DraftVersion] = []
-            var candidates: [DraftCandidate] = []
-            var steps: [AgentStepPayload] = []
-
-            for (offset, mode) in modes.enumerated() {
-                let response = await self.executeWorkflow(
-                    NativeWorkflowCatalog.polishDraft(
-                        context: context,
-                        content: base.content,
-                        mode: mode,
-                        style: style,
-                        template: self.promptTemplate(for: .polishDraft)
-                    )
-                ).draftResponse
-                try Task.checkCancellation()
-            steps.append(
-                    AgentStepPayload(
-                        step_index: offset + 1,
-                        name: "候选·\(mode.title)",
-                        status: response.success == true ? "success" : "fallback",
-                        input_summary: response.input_summary ?? "",
-                        output_summary: response.output_summary ?? "",
-                        elapsed_ms: response.elapsed_ms ?? 0,
-                        error: response.error ?? ""
-                    )
-                )
-
-                let after = self.draftSnapshot(from: response.result, base: base)
-                let candidateIndex = offset + 1
-                candidates.append(
-                    DraftCandidate(
-                        index: candidateIndex,
-                        label: mode.title,
-                        title: after.title,
-                        summary: after.summary,
-                        content: after.content
-                    )
-                )
-                let note = response.success == true
-                    ? "多版本候选：\(mode.promptInstruction)"
-                    : "本地候选：\(response.error ?? "未配置 API Key")"
-                // 这是 18 章之前就有的"多版本候选"功能：选择方式是在下方版本列表里逐个"恢复后"预览再手动保存，
-                // 不走 18.4.1 新增的 pending/confirmed 待复核闭环，因此维持默认的 `confirmed`，不引入第三种状态。
-                let version = try self.database.saveDraftVersion(
-                    articleID: self.selectedArticleID,
-                    titleSnapshot: self.titleIfAvailable(),
-                    action: "候选·\(mode.title)",
-                    note: note,
-                    before: base,
-                    after: after
-                )
-                createdVersions.append(version)
-            }
-
-            self.draftVersions = createdVersions + self.draftVersions
-            var judgeContext = self.currentWritingContext(style: style)
-            judgeContext.applyDraftSnapshot(base)
-            // 22.3.4：只打乱送评的呈现顺序，candidate.index 仍是稳定编号，评委按编号解析 best_candidate_index。
-            let presentedCandidates = candidates.shuffled(using: &self.candidateShuffleRNG)
-            let presentationOrderText = "呈现顺序：\(presentedCandidates.map { String($0.index) }.joined(separator: ","))"
-            let judgement = await self.executeWorkflow(
-                NativeWorkflowCatalog.judgeDraftCandidates(
-                    context: judgeContext,
-                    base: base,
-                    candidates: presentedCandidates,
-                    style: style,
-                    template: self.promptTemplate(for: .candidateJudge)
-                )
-            ).candidateJudgeResponse
-            try Task.checkCancellation()
-            steps.append(
-                AgentStepPayload(
-                    step_index: steps.count + 1,
-                    name: "候选评委排序",
-                    status: judgement.success == true ? "success" : "fallback",
-                    input_summary: [presentationOrderText, judgement.input_summary ?? ""]
-                        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                        .joined(separator: "\n---\n"),
-                    output_summary: judgement.output_summary ?? "",
-                    elapsed_ms: judgement.elapsed_ms ?? 0,
-                    error: judgement.error ?? ""
-                )
-            )
-
-            let bestIndex = judgement.result.best_candidate_index ?? candidates.first?.index ?? 1
-            let selectedCandidate = candidates.first { $0.index == bestIndex } ?? candidates[0]
-            let retrieval = try self.retrievedMaterialsBlock(
-                query: [selectedCandidate.title, self.ideaInput, self.outline]
-                    .joined(separator: "\n")
-            )
-            let coordinator = DeepDraftCoordinator(aiClient: self.aiClient)
-            let deepOutput = try await coordinator.run(
-                input: DeepDraftInput(
-                    title: selectedCandidate.title,
-                    summary: selectedCandidate.summary,
-                    content: selectedCandidate.content,
-                    outline: self.outline,
-                    idea: self.ideaInput,
-                    direction: self.normalizedDirection,
-                    materials: retrieval.materials,
-                    style: style,
-                    previousReview: self.latestReview,
-                    writingReviewTemplate: self.promptTemplate(for: .writingReview),
-                    config: self.currentModelConfig,
-                    apiKey: self.apiKeyInput
-                )
-            )
-            let allSteps = AgentRunPayloads.reindexed(steps + deepOutput.steps)
-            try self.recordAgentRun(
-                runType: "多候选优选与深度成稿",
-                status: allSteps.allSatisfy { $0.status == "success" } && deepOutput.success ? "success" : "fallback",
-                summary: [
-                    "已生成 \(createdVersions.count) 个全文候选，默认采用候选 \(selectedCandidate.index)。",
-                    judgement.result.bestReason,
-                    deepOutput.summaryText
-                ]
-                    .compactMap { $0 }
-                    .joined(separator: " "),
-                elapsedMS: allSteps.reduce(0) { $0 + $1.elapsed_ms },
-                inputSummary: context.summaryText,
-                outputSummary: [
-                    createdVersions.map(\.action).joined(separator: "；"),
-                    judgement.result.summary ?? "",
-                    deepOutput.summaryText
-                ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n---\n"),
-                error: allSteps.map(\.error).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "；"),
-                steps: allSteps
-            )
-            try await self.finalizeGeneratedDraft(
-                result: deepOutput.draft,
-                fallbackTitle: selectedCandidate.title,
-                style: style,
-                actionTitle: "多候选优选·深度成稿",
-                successNote: [
-                    "评委默认采用候选 \(selectedCandidate.index)：\(judgement.result.bestReason ?? "完成候选排序")",
-                    deepOutput.summaryText
-                ].joined(separator: "\n"),
-                failureNote: [
-                    judgement.error ?? "",
-                    deepOutput.error
-                ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "；"),
-                usedFallback: judgement.success != true || !deepOutput.success,
-                clearArticleSelection: false,
-                retrievedFragments: retrieval.fragments,
-                iterationSummary: deepOutput.iterations,
-                candidateJudgement: judgement.result
-            )
-            self.statusText = "已生成 \(createdVersions.count) 个候选，候选 \(selectedCandidate.index) 已进入深度成稿，请确认或放弃"
-        }
-    }
-
     func reviewCurrentDraft() async {
         guard canRunWritingCoach else {
             statusText = "请先输入想法、大纲或正文"
@@ -2070,7 +1904,7 @@ final class WorkshopStore: ObservableObject {
         editRecordMonthlySummary = snapshot.monthlySummary
     }
 
-    private func retrievedMaterialsBlock(query: String) throws -> (materials: String, fragments: [RetrievedFragment], corpus: [Fragment]) {
+    func retrievedMaterialsBlock(query: String) throws -> (materials: String, fragments: [RetrievedFragment], corpus: [Fragment]) {
         try WorkshopRetrieval.materialsBlock(query: query, materials: materials, database: database)
     }
 
@@ -2329,7 +2163,7 @@ final class WorkshopStore: ObservableObject {
         [title, summary, content, outline, ideaInput].joined(separator: "\u{1F}")
     }
 
-    private func currentWritingContext(style: StyleProfile) -> ContextPackage {
+    func currentWritingContext(style: StyleProfile) -> ContextPackage {
         var context = contextBuilder.build(
             title: title,
             summary: summary,
@@ -2393,7 +2227,7 @@ final class WorkshopStore: ObservableObject {
         return style
     }
 
-    private func currentDraftSnapshot() -> DraftSnapshot {
+    func currentDraftSnapshot() -> DraftSnapshot {
         DraftSnapshot(title: title, summary: summary, content: content)
     }
 
@@ -2477,7 +2311,7 @@ final class WorkshopStore: ObservableObject {
             .filter { !$0.isEmpty }
     }
 
-    private func titleIfAvailable() -> String {
+    func titleIfAvailable() -> String {
         let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !value.isEmpty {
             return value
@@ -2525,14 +2359,6 @@ final class WorkshopStore: ObservableObject {
         summary = result.summary ?? summary
         content = result.content ?? result.raw_output ?? content
         draftTags = result.tags ?? draftTags
-    }
-
-    private func draftSnapshot(from result: DraftResult, base: DraftSnapshot) -> DraftSnapshot {
-        DraftSnapshot(
-            title: result.title ?? base.title,
-            summary: result.summary ?? base.summary,
-            content: result.content ?? result.raw_output ?? base.content
-        )
     }
 
     private func agentDraftNote(_ response: AgentDraftResponse) -> String {
