@@ -2160,6 +2160,15 @@ Claude Code / Codex 给本产品的启发不是复制代码能力，而是复制
 
 验收：以行数与职责抽查为准，不设硬性截止——但第 20 章新功能一律不得在 Store 里手写编排（见 21.5 护栏）。
 
+**实施记录（R5 集中还债·招式二，2026-07-08，任务 20–23）**：四块领域逻辑外迁——
+① `CandidateSelectionCoordinator`（多候选优选编排，护栏生效前的历史欠账）；
+② `PendingReviewMachine`（待复核状态机独立成类型 + 首次获得机器级测试，孤儿清理增加"绝不误删 confirmed"守卫）；
+③ `MemoryLoopService`（雷区/编辑偏好双流程，"归纳不落库、确认才写库"铁律固化在类型设计）；
+④ `AutosaveController`（存储与防抖）+ 复制/导出薄转发迁扩展文件。
+`WorkshopStore.swift` 2686 → 1957 行（-729），Store 收敛为"UI 状态 + 绑定 + 转发"；
+`architecture_guard.sh` 增加**棘轮机制**：警戒线随还债只降不升（2600→2550→2350→2170→2050）。
+剩余路径：招式一（18 处 recordAgentRun 单步样板收敛，约 -300 行）+ 招式三（extension 拆文件）→ 1200 目标。
+
 **实施记录：R5 进行中**。`WorkshopStore.swift` 当前 2635 行，已超过 21.5 设定的迁移期护栏警戒线（2600 行，`script/architecture_guard.sh` 对此只告警不阻断），距最终目标（1200 行）仍有较大差距；R2/R3/R4 已完成后 Store 内编排样板已大幅收敛，但瘦身本身尚未达标，需持续推进。
 
 ### 21.4 执行策略与顺序

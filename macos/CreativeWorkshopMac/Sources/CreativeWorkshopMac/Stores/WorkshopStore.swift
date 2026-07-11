@@ -109,15 +109,14 @@ final class WorkshopStore: ObservableObject {
     private let keychain: KeychainCredentialStore
     /// 22.3.4：候选评委呈现顺序的随机源，可注入固定种子以便测试复现打乱结果。
     var candidateShuffleRNG: AnyRandomNumberGenerator
-    private var draftTags: [String] = []
-    private var isApplyingAutosaveSnapshot = false
-    private var pendingAutosaveTask: Task<Void, Never>?
+    var draftTags: [String] = []
+    var isApplyingAutosaveSnapshot = false
+    let autosave = AutosaveController()
     private var currentOperationTask: Task<Void, Error>?
     private var currentOperationIsCancellable = false
     private var currentOperationName: String?
     /// 23.5：计划执行等待作者确认/放弃待复核产物时挂起的续体；confirm/discard 或会话切换时唯一消费一次。
     var pendingDraftReviewContinuation: CheckedContinuation<PendingDraftReviewResolution, Never>?
-    private static let autosaveKey = "CreativeWorkshopMac.autosavedDraft.v1"
 
     convenience init() {
         do {
@@ -146,7 +145,7 @@ final class WorkshopStore: ObservableObject {
         self.modelName = config.model
         self.modelWorkflowOverridesText = Self.prettyJSON(config.workflowOverrides)
         self.runtimeStatus = database.runtimeStatus(model: config.model)
-        self.showAutosaveRestorePrompt = Self.loadAutosavedDraft() != nil
+        self.showAutosaveRestorePrompt = autosave.load() != nil
         self.agentLabEnabled = (try? database.agentLabEnabled()) ?? false
         self.agentCallBudget = (try? database.agentCallBudget()) ?? 12
     }
@@ -228,131 +227,6 @@ final class WorkshopStore: ObservableObject {
 
     var canRunReaderPerspective: Bool {
         !isLoading && !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var hasAutosavedDraft: Bool {
-        Self.loadAutosavedDraft() != nil
-    }
-
-    func scheduleAutosaveSnapshot() {
-        guard !isApplyingAutosaveSnapshot else { return }
-        pendingAutosaveTask?.cancel()
-        pendingAutosaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            guard !Task.isCancelled else { return }
-            self?.pendingAutosaveTask = nil
-            self?.writeAutosaveSnapshot()
-        }
-    }
-
-    func saveAutosaveSnapshot() {
-        pendingAutosaveTask?.cancel()
-        pendingAutosaveTask = nil
-        writeAutosaveSnapshot()
-    }
-
-    private func writeAutosaveSnapshot() {
-        guard !isApplyingAutosaveSnapshot else { return }
-
-        let hasDraftContent = [
-            title,
-            summary,
-            content,
-            outline,
-            ideaInput,
-            materials
-        ]
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty == false
-
-        guard hasDraftContent || pendingDraftReview != nil else {
-            clearAutosaveSnapshot()
-            return
-        }
-
-        let snapshot = AutoSavedDraft(
-            selectedArticleID: selectedArticleID,
-            selectedTopicID: selectedTopicID,
-            articleStatus: articleStatus,
-            title: title,
-            summary: summary,
-            content: content,
-            outline: outline,
-            ideaInput: ideaInput,
-            writingDirection: writingDirection,
-            materials: materials,
-            draftTags: draftTags,
-            pendingDraftReview: pendingDraftReview,
-            latestSelfCheck: latestSelfCheck,
-            savedAt: Self.nowString()
-        )
-
-        if let data = try? JSONEncoder().encode(snapshot) {
-            UserDefaults.standard.set(data, forKey: Self.autosaveKey)
-        }
-    }
-
-    func restoreAutosavedDraft() {
-        guard let snapshot = Self.loadAutosavedDraft() else {
-            showAutosaveRestorePrompt = false
-            statusText = "没有可恢复的草稿"
-            return
-        }
-
-        isApplyingAutosaveSnapshot = true
-        defer { isApplyingAutosaveSnapshot = false }
-
-        selectedArticleID = snapshot.selectedArticleID.flatMap { id in
-            articles.contains(where: { $0.id == id }) ? id : nil
-        }
-        selectedTopicID = snapshot.selectedTopicID.flatMap { id in
-            topics.contains(where: { $0.id == id }) ? id : nil
-        }
-        articleStatus = snapshot.articleStatus
-        title = snapshot.title
-        summary = snapshot.summary
-        content = snapshot.content
-        contentSelection = NSRange(location: 0, length: 0)
-        outline = snapshot.outline
-        ideaInput = snapshot.ideaInput
-        writingDirection = snapshot.writingDirection
-        materials = snapshot.materials
-        draftTags = snapshot.draftTags
-        pendingDraftReview = snapshot.pendingDraftReview
-        latestSelfCheck = snapshot.latestSelfCheck
-        if let selectedArticleID {
-            latestReview = try? database.listWritingReviews(articleID: selectedArticleID, limit: 1).first
-            latestPublishAssets = try? database.listPublishAssets(articleID: selectedArticleID, limit: 1).first
-            latestAdvisorRun = try? database.listWritingAdvisorRuns(articleID: selectedArticleID, limit: 1).first
-            draftVersions = (try? database.listDraftVersions(articleID: selectedArticleID, limit: 8)) ?? []
-        } else {
-            latestReview = nil
-            latestPublishAssets = nil
-            latestAdvisorRun = nil
-            draftVersions = []
-        }
-        showAutosaveRestorePrompt = false
-        statusText = "已恢复未保存草稿"
-    }
-
-    func discardAutosavedDraft() {
-        clearAutosaveSnapshot()
-        showAutosaveRestorePrompt = false
-        statusText = "已丢弃未保存草稿"
-    }
-
-    private func clearAutosaveSnapshot() {
-        UserDefaults.standard.removeObject(forKey: Self.autosaveKey)
-    }
-
-    private static func loadAutosavedDraft() -> AutoSavedDraft? {
-        guard let data = UserDefaults.standard.data(forKey: autosaveKey) else { return nil }
-        return try? JSONDecoder().decode(AutoSavedDraft.self, from: data)
-    }
-
-    private static func nowString() -> String {
-        ISO8601DateFormatter().string(from: Date())
     }
 
     func refreshAll() async {
@@ -1526,74 +1400,6 @@ final class WorkshopStore: ObservableObject {
             }
             self.statusText = response.success == true ? "发布物料已生成" : "已使用本地发布物料：\(response.error ?? "未配置 API Key")"
         }
-    }
-
-    func copyToClipboard(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-        statusText = "已复制"
-    }
-
-    func copyArticleContent(format: ArticleCopyFormat) {
-        let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else {
-            statusText = "正文为空，无法复制"
-            return
-        }
-
-        copyToClipboard(
-            ArticleExportFormatter.articleContent(
-                format: format,
-                title: title,
-                summary: summary,
-                content: content
-            )
-        )
-        statusText = "已复制正文（\(format.statusName)）"
-    }
-
-    func copyLatestWritingReview() {
-        guard let review = latestReview else {
-            statusText = "暂无可复制的诊断"
-            return
-        }
-
-        copyToClipboard(ArticleExportFormatter.writingReview(review, fallbackTitle: title))
-        statusText = "已复制写作教练诊断"
-    }
-
-    func copyThirtyDayReviewReport() {
-        do {
-            copyToClipboard(try thirtyDayReviewReport())
-            statusText = "已复制 30 天写作教练报告"
-        } catch {
-            statusText = error.localizedDescription
-        }
-    }
-
-    func exportThirtyDayReviewReport() {
-        do {
-            let report = try thirtyDayReviewReport()
-            let panel = NSSavePanel()
-            panel.title = "导出 30 天写作教练报告"
-            panel.nameFieldStringValue = "创作工坊-30天写作教练报告.md"
-            panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
-            guard panel.runModal() == .OK, let url = panel.url else {
-                statusText = "已取消导出报告"
-                return
-            }
-            try report.write(to: url, atomically: true, encoding: .utf8)
-            statusText = "已导出 30 天写作教练报告"
-        } catch {
-            statusText = error.localizedDescription
-        }
-    }
-
-    private func thirtyDayReviewReport() throws -> String {
-        try ArticleExportFormatter.thirtyDayReviewReport(
-            reviews: database.listWritingReviews(limit: 50),
-            generatedAt: Self.nowString()
-        )
     }
 
     func saveArticle() async {
