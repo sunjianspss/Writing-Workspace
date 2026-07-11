@@ -75,10 +75,10 @@ if [[ -n "$coordinator_chat_message_hits" ]]; then
   fail=1
 fi
 
-# R5 瘦身棘轮：每完成一个瘦身任务把警戒线拧低一格，只降不升（任务 20 后为 2550）。
+# R5 瘦身棘轮：每完成一个瘦身任务把警戒线拧低一格，只降不升（任务 21 后为 2350）。
 store_lines="$(wc -l < "$STORE_FILE" | tr -d ' ')"
-if [[ "$store_lines" -gt 2550 ]]; then
-  echo "WARNING: WorkshopStore.swift is ${store_lines} lines; ratchet guardrail is 2550, final target is 1200." >&2
+if [[ "$store_lines" -gt 2350 ]]; then
+  echo "WARNING: WorkshopStore.swift is ${store_lines} lines; ratchet guardrail is 2350, final target is 1200." >&2
 fi
 
 exit "$fail"

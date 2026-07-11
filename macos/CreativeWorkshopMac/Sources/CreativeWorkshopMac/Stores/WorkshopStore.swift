@@ -116,7 +116,7 @@ final class WorkshopStore: ObservableObject {
     private var currentOperationIsCancellable = false
     private var currentOperationName: String?
     /// 23.5：计划执行等待作者确认/放弃待复核产物时挂起的续体；confirm/discard 或会话切换时唯一消费一次。
-    private var pendingDraftReviewContinuation: CheckedContinuation<PendingDraftReviewResolution, Never>?
+    var pendingDraftReviewContinuation: CheckedContinuation<PendingDraftReviewResolution, Never>?
     private static let autosaveKey = "CreativeWorkshopMac.autosavedDraft.v1"
 
     convenience init() {
@@ -784,13 +784,8 @@ final class WorkshopStore: ObservableObject {
         latestSelfCheck = nil
         latestReaderPerspective = nil
 
-        // 未确认/未放弃就切走：正文即将被新文章/新草稿覆盖，视为隐式放弃，
-        // 只需清理 draft_versions 里那条孤儿 pending 记录，避免永久残留（18.4.1）。
-        if let orphaned = pendingDraftReview {
-            pendingDraftReview = nil
-            Task { try? self.database.deleteDraftVersion(id: orphaned.draftVersionID) }
-            resolvePendingDraftReviewContinuation(with: .discarded)
-        }
+        // 未确认/未放弃就切走：视为隐式放弃，清理孤儿 pending 行（18.4.1，语义在 PendingReviewMachine）。
+        abandonOrphanedPendingReview()
     }
 
     func newMaterial() {
@@ -1666,36 +1661,6 @@ final class WorkshopStore: ObservableObject {
         }
     }
 
-    /// 人工确认后才把候选写入正文（18.3.1 验收标准 3）。
-    func confirmPendingIssueRewrite() async {
-        guard let pending = pendingIssueRewrite else { return }
-        await run("确认定点改写") {
-            let before = self.currentDraftSnapshot()
-            guard self.replaceSelectedContent(range: pending.range, expectedText: pending.originalText, replacement: pending.replacement) else {
-                self.pendingIssueRewrite = nil
-                self.statusText = "正文已变化，请重新定位后再改写"
-                return
-            }
-            let note = pending.note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let version = try self.database.saveDraftVersion(
-                articleID: self.selectedArticleID,
-                titleSnapshot: self.titleIfAvailable(),
-                action: "定点改写·\(pending.issue.dimension)",
-                note: note?.isEmpty == false ? note : "根据诊断建议改写",
-                before: before,
-                after: self.currentDraftSnapshot()
-            )
-            self.draftVersions = [version] + self.draftVersions
-            self.pendingIssueRewrite = nil
-            self.statusText = "已应用改写并替换正文"
-        }
-    }
-
-    func discardPendingIssueRewrite() {
-        pendingIssueRewrite = nil
-        statusText = "已放弃本次改写候选"
-    }
-
     func generatePublishAssets() async {
         guard canGeneratePublishAssets else {
             statusText = "请先填写标题、摘要或正文"
@@ -1914,96 +1879,6 @@ final class WorkshopStore: ObservableObject {
         try database.rebuildFragments()
     }
 
-    func restoreDraftVersionBefore(_ version: DraftVersion) {
-        applySnapshot(version.beforeSnapshot)
-        statusText = "已恢复到「\(version.action)」之前"
-    }
-
-    func restoreDraftVersionAfter(_ version: DraftVersion) {
-        applySnapshot(version.afterSnapshot)
-        statusText = "已恢复到「\(version.action)」之后"
-    }
-
-    /// 23.5：计划执行中某步产生待复核产物时用于暂停/恢复序列的信号。
-    enum PendingDraftReviewResolution {
-        case confirmed
-        case discarded
-    }
-
-    /// 供计划执行序列使用：待复核为空时立即返回，否则挂起直到作者确认/放弃，或会话切换隐式放弃。
-    func waitForPendingDraftReviewResolution() async -> PendingDraftReviewResolution {
-        guard pendingDraftReview != nil else { return .confirmed }
-        return await withCheckedContinuation { continuation in
-            self.pendingDraftReviewContinuation = continuation
-        }
-    }
-
-    private func resolvePendingDraftReviewContinuation(with resolution: PendingDraftReviewResolution) {
-        pendingDraftReviewContinuation?.resume(returning: resolution)
-        pendingDraftReviewContinuation = nil
-    }
-
-    /// 确认当前"待复核"候选为定稿（18.4.1）：正文早已预览显示，这里只把版本状态从 pending 翻为 confirmed。
-    func confirmPendingDraftReview() async {
-        guard let pending = pendingDraftReview else { return }
-        if let version = draftVersions.first(where: { $0.id == pending.draftVersionID }) {
-            await confirmDraftVersion(version)
-        } else {
-            await run("确认版本") {
-                _ = try self.database.confirmDraftVersion(id: pending.draftVersionID)
-                self.statusText = "已确认为定稿"
-            }
-        }
-        pendingDraftReview = nil
-        latestSelfCheck = nil
-        saveAutosaveSnapshot()
-        resolvePendingDraftReviewContinuation(with: .confirmed)
-    }
-
-    /// 放弃当前"待复核"候选（18.4.1）：正文回退到生成前的版本，并从历史中移除这条从未落地的记录。
-    func discardPendingDraftReview() async {
-        guard let pending = pendingDraftReview else { return }
-        if let version = draftVersions.first(where: { $0.id == pending.draftVersionID }) {
-            await discardDraftVersion(version)
-        } else {
-            await run("放弃版本") {
-                try self.database.deleteDraftVersion(id: pending.draftVersionID)
-                self.applySnapshot(pending.before)
-                self.statusText = "已放弃该版本"
-            }
-        }
-        pendingDraftReview = nil
-        latestSelfCheck = nil
-        saveAutosaveSnapshot()
-        resolvePendingDraftReviewContinuation(with: .discarded)
-    }
-
-    /// 供改稿版本列表里历史"待复核"记录使用（例如切换文章后再回来confirm）。
-    func confirmDraftVersion(_ version: DraftVersion) async {
-        await run("确认版本") {
-            let updated = try self.database.confirmDraftVersion(id: version.id)
-            self.draftVersions = self.draftVersions.map { $0.id == updated.id ? updated : $0 }
-            if self.pendingDraftReview?.draftVersionID == version.id {
-                self.pendingDraftReview = nil
-                self.resolvePendingDraftReviewContinuation(with: .confirmed)
-            }
-            self.statusText = "已确认为定稿"
-        }
-    }
-
-    func discardDraftVersion(_ version: DraftVersion) async {
-        await run("放弃版本") {
-            try self.database.deleteDraftVersion(id: version.id)
-            self.draftVersions.removeAll { $0.id == version.id }
-            if self.pendingDraftReview?.draftVersionID == version.id {
-                self.applySnapshot(version.beforeSnapshot)
-                self.pendingDraftReview = nil
-                self.resolvePendingDraftReviewContinuation(with: .discarded)
-            }
-            self.statusText = "已放弃该版本"
-        }
-    }
-
     func cancelCurrentOperation() {
         guard let currentOperationTask, currentOperationIsCancellable else {
             statusText = "当前没有可取消的生成任务"
@@ -2191,7 +2066,7 @@ final class WorkshopStore: ObservableObject {
         promptTemplates.first { $0.key == key.rawValue } ?? (try? database.promptTemplate(key: key))
     }
 
-    private func executeWorkflow<Output: Codable>(
+    func executeWorkflow<Output: Codable>(
         _ descriptor: WorkflowDescriptor<Output>,
         onPartialOutput: (@Sendable (String) -> Void)? = nil
     ) async -> AIRun<Output> {
@@ -2231,7 +2106,7 @@ final class WorkshopStore: ObservableObject {
         DraftSnapshot(title: title, summary: summary, content: content)
     }
 
-    private func applySnapshot(_ snapshot: DraftSnapshot) {
+    func applySnapshot(_ snapshot: DraftSnapshot) {
         title = snapshot.title
         summary = snapshot.summary
         content = snapshot.content
@@ -2268,7 +2143,7 @@ final class WorkshopStore: ObservableObject {
         return String(content[lowerBound..<upperBound])
     }
 
-    private func replaceSelectedContent(range: NSRange, expectedText: String, replacement: String) -> Bool {
+    func replaceSelectedContent(range: NSRange, expectedText: String, replacement: String) -> Bool {
         guard let swiftRange = Range(range, in: content),
               String(content[swiftRange]) == expectedText else {
             return false
@@ -2354,7 +2229,7 @@ final class WorkshopStore: ObservableObject {
         )
     }
 
-    private func applyDraft(_ result: DraftResult, fallbackTitle: String) {
+    func applyDraft(_ result: DraftResult, fallbackTitle: String) {
         title = result.title ?? fallbackTitle
         summary = result.summary ?? summary
         content = result.content ?? result.raw_output ?? content
@@ -2413,80 +2288,6 @@ final class WorkshopStore: ObservableObject {
     /// 一键初稿/大纲成稿/全文润色的统一收尾（18.3.5 自检 + 18.4.1 待复核）。
     /// 正文立即更新到编辑器（保留现有的即时预览体验），但版本落地为 `pending`，
     /// 必须经 `confirmPendingDraftReview`/`discardPendingDraftReview` 才会变成 `confirmed` 或回退。
-    func finalizeGeneratedDraft(
-        result: DraftResult,
-        fallbackTitle: String,
-        style: StyleProfile,
-        actionTitle: String,
-        successNote: String?,
-        failureNote: String?,
-        usedFallback: Bool,
-        clearArticleSelection: Bool,
-        agentTrace: AgentDraftTrace? = nil,
-        retrievedFragments: [RetrievedFragment] = [],
-        sectionFragmentContexts: [SectionFragmentContext] = [],
-        iterationSummary: [DeepDraftIteration]? = nil,
-        candidateJudgement: CandidateJudgeResult? = nil
-    ) async throws {
-        let before = currentDraftSnapshot()
-        let articleID = selectedArticleID
-        let titleSnapshot = titleIfAvailable()
-        applyDraft(result, fallbackTitle: fallbackTitle)
-        let after = currentDraftSnapshot()
-
-        var selfCheckContext = currentWritingContext(style: style)
-        selfCheckContext.title = after.title
-        selfCheckContext.summary = after.summary
-        selfCheckContext.content_excerpt = after.content
-        selfCheckContext.word_count = after.content.count
-        let selfCheckResponse = await executeWorkflow(
-            NativeWorkflowCatalog.draftSelfCheck(
-                context: selfCheckContext,
-                style: style,
-                template: promptTemplate(for: .draftSelfCheck)
-            )
-        ).draftSelfCheckResponse
-        if Task.isCancelled {
-            applySnapshot(before)
-            throw CancellationError()
-        }
-        latestSelfCheck = selfCheckResponse.result
-
-        let note = usedFallback ? failureNote : successNote
-        let version = try database.saveDraftVersion(
-            articleID: articleID,
-            titleSnapshot: titleSnapshot,
-            action: actionTitle,
-            note: note,
-            before: before,
-            after: after,
-            reviewStatus: "pending"
-        )
-        if clearArticleSelection {
-            selectedArticleID = nil
-        }
-        draftVersions = [version] + draftVersions
-        pendingDraftReview = PendingDraftReview(
-            draftVersionID: version.id,
-            actionTitle: actionTitle,
-            articleID: version.article_id,
-            before: before,
-            after: after,
-            note: note,
-            usedFallback: usedFallback,
-            selfCheck: selfCheckResponse.result,
-            matchedPitfalls: style.known_pitfalls ?? [],
-            agentTrace: agentTrace,
-            retrievedFragments: retrievedFragments,
-            sectionFragmentContexts: sectionFragmentContexts,
-            iterationSummary: iterationSummary,
-            candidateJudgement: candidateJudgement
-        )
-        statusText = usedFallback
-            ? "已使用本地内容，请确认或放弃：\(failureNote ?? "未配置 API Key")"
-            : "\(actionTitle)已生成，请确认或放弃"
-    }
-
     private func defaultOutline(for topic: Topic) -> String {
         """
         # \(topic.title)

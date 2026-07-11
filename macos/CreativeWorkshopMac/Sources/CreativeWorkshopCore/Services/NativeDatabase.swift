@@ -533,6 +533,15 @@ package final class NativeDatabase {
         )
     }
 
+    /// 按 id 查单个改稿版本（R5 任务 21：PendingReviewMachine 的孤儿清理守卫需要核对 review_status）。
+    package func draftVersion(id: Int) throws -> DraftVersion? {
+        try rows(
+            "\(draftVersionSelectSQL) WHERE id = ? LIMIT 1",
+            [id],
+            mapper: draftVersion
+        ).first
+    }
+
     package func listAICalls(limit: Int = 20) throws -> [AICallRecord] {
         let safeLimit = max(1, min(limit, 100))
         return try rows(
