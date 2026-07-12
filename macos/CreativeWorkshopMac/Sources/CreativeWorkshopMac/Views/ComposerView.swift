@@ -33,6 +33,22 @@ struct ComposerView: View {
         .onChange(of: store.articleStatus) { _ in store.scheduleAutosaveSnapshot() }
         .onChange(of: store.pendingDraftReview?.draftVersionID) { _ in store.scheduleAutosaveSnapshot() }
         // 18.3.2 防空转：内容自上次诊断后未变化时，必须先提示后才允许发起新的模型调用。
+        // 24.1 发布流程护栏：未经"已发布"直接归档会缺失终审与编辑量记录（北极星指标）。
+        .confirmationDialog(
+            "这篇文章尚未标记\u{201C}已发布\u{201D}。直接归档将跳过发表前终审与编辑量记录。",
+            isPresented: $store.showArchiveWithoutPublishPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("先发布再归档") {
+                Task { await store.archiveAfterPublishing() }
+            }
+            Button("仍然归档", role: .destructive) {
+                Task { await store.archiveWithoutPublishing() }
+            }
+            Button("取消", role: .cancel) {
+                store.cancelArchivePrompt()
+            }
+        }
         .confirmationDialog(
             "内容与上次诊断时相同，仍要重新诊断吗？",
             isPresented: $store.showUnchangedReviewPrompt,
@@ -685,20 +701,47 @@ struct ComposerView: View {
                 .pickerStyle(.segmented)
 
                 Button {
-                    Task { await store.updateSelectedArticleStatus(store.articleStatus) }
+                    Task { await store.requestArticleStatusChange(store.articleStatus) }
                 } label: {
                     Label("更新状态", systemImage: "checkmark.circle")
                 }
                 .disabled(store.isLoading)
 
                 Button {
-                    Task { await store.updateSelectedArticleStatus("已归档") }
+                    Task { await store.requestArticleStatusChange("已归档") }
                 } label: {
                     Label("归档", systemImage: "archivebox")
                 }
                 .disabled(store.isLoading || store.articleStatus == "已归档")
             }
             .controlSize(.small)
+
+            publishFlowIndicator
+        }
+    }
+
+    /// 24.1 发布流程指示条：让"已发布"作为数据链必经站自解释。
+    private var publishFlowIndicator: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(WorkshopStore.publishFlowStages.enumerated()), id: \.offset) { index, stage in
+                if index > 0 {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                }
+                Text(stage)
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        index == store.publishFlowStageIndex ? Color.accentColor.opacity(0.18) : Color.clear,
+                        in: Capsule()
+                    )
+                    .foregroundStyle(index == store.publishFlowStageIndex ? Color.accentColor : .secondary)
+            }
+            Text("发布时记录终审与编辑量")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -835,14 +878,14 @@ struct ComposerView: View {
     private var publicationSaveControls: some View {
         HStack(spacing: 8) {
             Button {
-                Task { await store.updateSelectedArticleStatus(store.articleStatus) }
+                Task { await store.requestArticleStatusChange(store.articleStatus) }
             } label: {
                 Label("更新状态", systemImage: "checkmark.circle")
             }
             .disabled(store.isLoading)
 
             Button {
-                Task { await store.updateSelectedArticleStatus("已归档") }
+                Task { await store.requestArticleStatusChange("已归档") }
             } label: {
                 Label("归档", systemImage: "archivebox")
             }

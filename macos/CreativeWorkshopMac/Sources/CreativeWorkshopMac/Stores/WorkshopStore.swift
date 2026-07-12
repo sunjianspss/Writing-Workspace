@@ -103,6 +103,10 @@ final class WorkshopStore: ObservableObject {
     // MARK: - 19.3.1 自动保存与草稿恢复
     @Published var showAutosaveRestorePrompt: Bool = false
 
+    // MARK: - 24.1 发布流程引导
+    /// 文章未经"已发布"直接归档时的确认（跳过发布会缺失终审与编辑量记录）。
+    @Published var showArchiveWithoutPublishPrompt: Bool = false
+
     let database: NativeDatabase
     let aiClient: AIWorkflowExecuting
     private let contextBuilder: WritingContextBuilder

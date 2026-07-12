@@ -862,6 +862,95 @@ final class WorkshopStoreTests: XCTestCase {
         )
     }
 
+    // MARK: - 24.1 发布流程引导
+
+    func testArchiveRequestOnUnpublishedArticleShowsPromptAndKeepsStatus() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(title: "未发布文章", content: "正文", summary: "", status: "草稿", tags: [], related_topic_id: nil, genre: nil)
+        )
+        store.articles = try database.listArticles()
+        store.selectedArticleID = article.id
+        store.articleStatus = "草稿"
+
+        await store.requestArticleStatusChange("已归档")
+
+        XCTAssertTrue(store.showArchiveWithoutPublishPrompt, "未发布直接归档应先确认")
+        XCTAssertEqual(try database.listArticles().first?.status, "草稿", "确认前状态不得变化")
+    }
+
+    func testArchiveAfterPublishingRunsAuditMetricsThenArchives() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(title: "补发布文章", content: "AI 确认稿，发布前补了一句。", summary: "", status: "草稿", tags: [], related_topic_id: nil, genre: nil)
+        )
+        _ = try database.saveDraftVersion(
+            articleID: article.id,
+            titleSnapshot: "补发布文章",
+            action: "代理生成初稿",
+            note: nil,
+            before: DraftSnapshot(title: "", summary: "", content: ""),
+            after: DraftSnapshot(title: "补发布文章", summary: "", content: "AI 确认稿"),
+            reviewStatus: "confirmed"
+        )
+        store.articles = try database.listArticles()
+        store.selectedArticleID = article.id
+        store.title = "补发布文章"
+        store.content = "AI 确认稿，发布前补了一句。"
+        store.showArchiveWithoutPublishPrompt = true
+
+        await store.archiveAfterPublishing()
+
+        XCTAssertFalse(store.showArchiveWithoutPublishPrompt)
+        XCTAssertEqual(try database.listArticles().first?.status, "已归档", "组合动作最终应归档")
+        XCTAssertEqual(try database.listEditRecords(limit: 5).count, 1, "发布环节必须记录编辑量（北极星）")
+        XCTAssertNotNil(store.latestPrePublishAudit, "发布环节必须跑发表前终审")
+    }
+
+    func testArchiveRequestOnPublishedArticleSkipsPrompt() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(title: "已发布文章", content: "正文", summary: "", status: "已发布", tags: [], related_topic_id: nil, genre: nil)
+        )
+        store.articles = try database.listArticles()
+        store.selectedArticleID = article.id
+        store.articleStatus = "已发布"
+
+        await store.requestArticleStatusChange("已归档")
+
+        XCTAssertFalse(store.showArchiveWithoutPublishPrompt, "已发布过的文章归档不应打扰")
+        XCTAssertEqual(try database.listArticles().first?.status, "已归档")
+    }
+
+    func testPublishFlowStageIndexFollowsDraftState() throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+
+        XCTAssertEqual(store.publishFlowStageIndex, 0, "空稿 = 构思")
+        store.content = "有正文了。"
+        XCTAssertEqual(store.publishFlowStageIndex, 1, "有正文 = 初稿")
+        store.pendingDraftReview = PendingDraftReview(
+            draftVersionID: 1, actionTitle: "测试", articleID: nil,
+            before: DraftSnapshot(title: "", summary: "", content: ""),
+            after: DraftSnapshot(title: "", summary: "", content: "x"),
+            note: nil, usedFallback: false, selfCheck: nil, matchedPitfalls: [],
+            agentTrace: nil, retrievedFragments: nil, sectionFragmentContexts: nil,
+            iterationSummary: nil, candidateJudgement: nil
+        )
+        XCTAssertEqual(store.publishFlowStageIndex, 2, "存在待复核 = 待复核站")
+        store.pendingDraftReview = nil
+        store.articleStatus = "已发布"
+        XCTAssertEqual(store.publishFlowStageIndex, 3)
+        store.articleStatus = "已归档"
+        XCTAssertEqual(store.publishFlowStageIndex, 4)
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
