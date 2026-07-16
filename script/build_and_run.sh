@@ -55,6 +55,10 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+INSTALLED_APP="/Applications/$APP_NAME.app"
+rm -rf "$INSTALLED_APP"
+cp -R "$APP_BUNDLE" "$INSTALLED_APP"
+
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
