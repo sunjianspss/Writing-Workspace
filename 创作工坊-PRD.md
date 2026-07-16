@@ -2433,6 +2433,8 @@ Claude Code / Codex 给本产品的启发不是复制代码能力，而是复制
 
 **实施记录**（任务 12）：编排落 `AdvisorPlanRunner.swift`（Core），Store 只留状态绑定与入口（`WorkshopStore+AdvisorPlan.swift`）；可执行动作子集按提案实现，rewrite_selection_* 与 save_article 跳过并注明；生成步产生待复核即暂停，作者确认后自动续行、放弃则整个序列停止；序列以 `agent_runs.session_kind = "plan_execution"` 留痕，逐步落 `agent_steps`。
 
+**实施记录**（2026-07-16 死锁修复）：`run(onProgress:)` 原先的进度回调是普通同步闭包，在协作线程池上直接改 Store 的 `@Published` 状态——回调持 Combine 发布锁触发 SwiftUI 同步布局等主线程，主线程恰在 `confirmPendingDraftReview()` 里等同一把发布锁，构成 AB-BA 死锁（写作现场卡死，`sample` 堆栈实证）。修复：回调签名改为 `@MainActor (AdvisorPlanProgress) -> Void`，全部调用点 `await`，进度更新一律回主线程。
+
 ### 23.6 P1：有界代理循环 `WritingAgentCoordinator`（L2，本章核心）
 
 一句话：把"深度成稿"的**固定循环**升级为"模型观察 → 选动作 → 护栏执行 → 验证回流"的**决策循环**，全部复用既有 descriptor。
