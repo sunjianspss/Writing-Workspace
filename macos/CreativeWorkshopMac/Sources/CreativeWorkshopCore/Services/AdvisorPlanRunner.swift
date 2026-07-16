@@ -83,7 +83,9 @@ package final class AdvisorPlanRunner {
     }
 
     /// 按序执行动作；每步完成后通过 `onProgress` 回调最新进度，供调用方转发到 UI。
-    package func run(onProgress: (AdvisorPlanProgress) -> Void) async -> AdvisorPlanRunResult {
+    /// 回调钉在 `@MainActor`：调用方（WorkshopStore）在回调里改 `@Published` 状态，
+    /// 若从协作线程池直接触发 Combine/SwiftUI 会与主线程互锁（2026-07-16 死锁复盘）。
+    package func run(onProgress: @MainActor (AdvisorPlanProgress) -> Void) async -> AdvisorPlanRunResult {
         var records: [AdvisorPlanStepRecord] = []
         let total = actions.count
 
@@ -92,11 +94,11 @@ package final class AdvisorPlanRunner {
 
             guard action.isAutomaticallyExecutable else {
                 records.append(AdvisorPlanStepRecord(index: index, action: action, status: "skipped", note: "已跳过：需要作者手动执行"))
-                onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+                await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
                 continue
             }
 
-            onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+            await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
 
             guard let executor else { break }
             let outcome = await executor.executeAdvisorPlanStep(action)
@@ -104,23 +106,23 @@ package final class AdvisorPlanRunner {
             switch outcome {
             case .completed:
                 records.append(AdvisorPlanStepRecord(index: index, action: action, status: "success", note: nil))
-                onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+                await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
             case .failed(let reason):
                 records.append(AdvisorPlanStepRecord(index: index, action: action, status: "failed", note: reason))
-                onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+                await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
                 return AdvisorPlanRunResult(records: records, stopReason: .failed(action: action, index: index, reason: reason))
             case .abandoned(let reason):
                 records.append(AdvisorPlanStepRecord(index: index, action: action, status: "abandoned", note: reason))
-                onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+                await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
                 return AdvisorPlanRunResult(records: records, stopReason: .abandoned(action: action, index: index, reason: reason))
             case .cancelled:
                 records.append(AdvisorPlanStepRecord(index: index, action: action, status: "cancelled", note: "计划执行已取消"))
-                onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
+                await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: index, currentAction: action, records: records))
                 return AdvisorPlanRunResult(records: records, stopReason: .cancelled)
             }
         }
 
-        onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: total, currentAction: nil, records: records))
+        await onProgress(AdvisorPlanProgress(totalSteps: total, currentIndex: total, currentAction: nil, records: records))
         return AdvisorPlanRunResult(records: records, stopReason: .finished)
     }
 }
