@@ -1594,6 +1594,8 @@ P2 代表“智能写作台成型”。
 
 **实施记录**：`draft_versions` 增加 `review_status`（默认 `confirmed`，历史记录不受影响），新增 `confirmDraftVersion(id:)`/`deleteDraftVersion(id:)`。三个大范围生成动作统一走 `finalizeGeneratedDraft(...)`：正文立即更新到编辑器供预览（保留原有"生成即可见"的体验），同时把这次改动存成 `pending` 版本，并把 `PendingDraftReview{ draftVersionID, before, after, selfCheck, matchedPitfalls, usedFallback }` 写进 `pendingDraftReview`。确认/放弃入口给了两处：Inspector 复核 tab 顶部的 `PendingDraftReviewCard`（改前/改后差异对比复用现有 `TextDiff` 工具、自检提示、命中的雷区清单）和 `ComposerView` 编辑器上方一条不依赖右侧栏的确认条（同样是"确认定稿"/"放弃"），因为右侧栏可能被隐藏或切换到其他 tab。"确认定稿"把 `draft_versions` 行翻成 `confirmed`；"放弃"删除该行并把正文回退到生成前快照。`saveArticle()` 增加前置校验：存在未处理的 `pendingDraftReview` 时拒绝保存并提示"还有未确认的生成结果"。切换文章/新建草稿时，若还有未处理的待复核记录，视为隐式放弃并清理数据库里的孤儿 `pending` 行（不恢复正文，因为正文即将被新文章/新草稿覆盖）。局部改写维持原有直接应用/`draft_versions` 默认 `confirmed` 的行为，未受影响。
 
+**实施记录**（2026-07-16 保存可回退）：作者实际使用中出现"代理产物降质但已确认，随手保存后旧定稿无处找回"的场景——待复核只拦生成，不拦保存本身。补上最后一环：`saveArticle()` 覆盖已存文章时，先取数据库里的旧定稿，保存成功后自动记一条 `action = "保存文章"` 的 confirmed 版本（before = 旧定稿，after = 本次保存内容），版本列表已有的「恢复前」按钮即可回到保存前；首次保存与内容未变的重复保存不记版本，避免噪音。`NativeDatabase.getArticle(id:)` 由 private 升为 package 供 Store 取旧稿。
+
 #### 18.4.2 文学写作能力雷达（复盘深化）
 
 改造前现状：`training_focus` 是自由文本列表，当时还没有第 8.9 节"复盘洞察"目标能力里提到的"跨文章统计作者弱项"，也没有专门针对文学维度的统计。

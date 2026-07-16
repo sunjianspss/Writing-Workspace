@@ -1420,12 +1420,32 @@ final class WorkshopStore: ObservableObject {
         let finalStatus = articleStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "草稿" : articleStatus
         await run(finalStatus == "已发布" ? "保存并发表前终审" : "保存文章", cancellable: finalStatus == "已发布") {
             let titleSnapshot = self.titleIfAvailable()
+            // 覆盖保存前留住已存定稿：保存本身也记一条版本，作者可用「恢复前」回到保存前的内容。
+            let previousSaved = self.selectedArticleID.flatMap { try? self.database.getArticle($0) }
             let article = try self.database.saveArticle(
                 id: self.selectedArticleID,
                 payload: .draft(title: self.title, content: self.content, summary: self.summary, status: finalStatus, tags: self.draftTags, topicID: self.selectedTopicID, genre: self.normalizedDirection)
             )
             self.selectedArticleID = article.id
             try self.database.attachDraftVersionsToArticle(articleID: article.id, titleSnapshot: titleSnapshot)
+            if let previousSaved {
+                let before = DraftSnapshot(
+                    title: previousSaved.title ?? "",
+                    summary: previousSaved.summary ?? "",
+                    content: previousSaved.content ?? ""
+                )
+                let after = self.currentDraftSnapshot()
+                if before != after {
+                    _ = try self.database.saveDraftVersion(
+                        articleID: article.id,
+                        titleSnapshot: titleSnapshot,
+                        action: "保存文章",
+                        note: "已覆盖旧定稿，「恢复前」可回到本次保存之前",
+                        before: before,
+                        after: after
+                    )
+                }
+            }
             var auditNote = ""
             if finalStatus == "已发布" { auditNote = try await self.runPrePublishAudit(articleID: article.id); self.applyPublishingMetrics(PublishingMetricsRecorder(database: self.database).recordPublishedArticle(article)) }
             self.articleStatus = article.status ?? finalStatus
