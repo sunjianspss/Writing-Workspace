@@ -1422,7 +1422,7 @@ package final class NativeDatabase {
         }
     }
 
-    private func getArticle(_ id: Int) throws -> Article {
+    package func getArticle(_ id: Int) throws -> Article {
         guard let article = try rows("\(articleSelectSQL) WHERE id = ?", [id], mapper: article).first else {
             throw NativeDatabaseError.notFound("article \(id)")
         }

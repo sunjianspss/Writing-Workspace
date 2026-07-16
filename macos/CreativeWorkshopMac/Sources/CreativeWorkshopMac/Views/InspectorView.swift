@@ -1383,7 +1383,7 @@ private struct DraftVersionsCard: View {
                 .font(.headline)
 
             if store.draftVersions.isEmpty {
-                Text("一键初稿、大纲成稿、全文改写、多版本候选和局部改写后，会自动保存修改前后版本。")
+                Text("一键初稿、大纲成稿、全文改写、多版本候选、局部改写和覆盖保存后，会自动保存修改前后版本。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

@@ -328,6 +328,33 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(store.editRecordStats?.total, 1)
     }
 
+    /// 保存也要可回退：覆盖已存文章时自动记一条「保存文章」版本，「恢复前」即可回到保存前定稿；
+    /// 首次保存与内容未变的重复保存不记版本，避免版本列表被噪音刷屏。
+    func testOverwritingSaveRecordsRestorableVersion() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.title = "造船"
+        store.content = "好版本"
+
+        await store.saveArticle()
+        let articleID = try XCTUnwrap(store.selectedArticleID)
+        XCTAssertTrue(try database.listDraftVersions(articleID: articleID, limit: 8).isEmpty, "首次保存没有旧稿可回退，不应记版本")
+
+        store.content = "降质版本"
+        await store.saveArticle()
+
+        let version = try XCTUnwrap(try database.listDraftVersions(articleID: articleID, limit: 8).first)
+        XCTAssertEqual(version.action, "保存文章")
+        XCTAssertEqual(version.before_content, "好版本")
+        XCTAssertEqual(version.after_content, "降质版本")
+
+        await store.saveArticle()
+        XCTAssertEqual(try database.listDraftVersions(articleID: articleID, limit: 8).count, 1, "内容未变的重复保存不应新增版本")
+
+        store.restoreDraftVersionBefore(version)
+        XCTAssertEqual(store.content, "好版本")
+    }
+
     func testDeepDraftStopsAtConfiguredMaxRoundsAndKeepsBestDraft() async throws {
         let ai = FakeAIClient()
         ai.writingReviewResponses = [
