@@ -2613,3 +2613,23 @@ schema 变更走 `PRAGMA user_version` 迁移。
 - `previousReviewBlock` 仍会把上一次分数原样喂给模型，理论上存在锚定/对抗性偏移；本次未动（无证据支持改动），留待三连诊断数据观察。
 - 内联 prompt 与 seed 模板仍是两份文案（仅锚点已共用）。彻底消除重复需让 seed 由内联 prompt 派生，属结构性改动，本次未做。
 - App 诊断分数与评测分数现已同锚点，理论上可比；历史 `writing_reviews` 分数是无锚点版打的，**不可与新分数混作趋势**。
+
+### 24.3 few-shot 样本断供、素材掐尾与评测样本泄漏（部分实施，2026-07-25）
+
+**背景**：24.2 修好评分量具后继续审查"还有什么在压制写作质量"，查作者活库得到三处证据。
+
+**根因一：风格样本长期为空**。`style_profiles.sample_texts = []`（作者从未手录样本），补偿机制 `resolveStyle()` 会把"同体裁近期文章"注入 few-shot，但匹配是 `WHERE genre = ?` **字符串精确相等**，而 `articles.genre` 保存时写入的是当时的**写作方向原文**（`WorkshopStore.swift:1427`）。作者库里体裁已碎成六值（情感文学 5、空 4、文学原著 2、技术分享 2、科研技术 1、广告创意 1），红楼梦系列被劈在"文学原著"与"情感文学"两桶；而 case-27 用的方向"经典文学解读"在库中匹配 **0 篇**。方向换个说法样本即归零，界面无提示，`samplesBlock` 静默返回"（暂无样本文章…）"——模型只能靠几个抽象形容词模仿作者。这是"写出来不像我"的直接原因。
+
+**根因二：素材超 1000 字掐尾**。`WritingContextBuilder` 用 prefix-only 的 `truncate(materials, limit: 1000)`，而 `materials` 是逐条累加的（`WorkshopStore.swift:538`，每次"用于本次写作"往后追加）。作者 ideas 最长 1627 字、均长 639——累加两条即溢出，**最后加入的素材最先消失**且无提示。
+
+**实施**：
+1. `recentArticlesForSamples` 的 `genre` 放宽为 `String?`，nil/空串表示不限体裁；新增 `finishedOnly` 只取已发布/已归档。
+2. `resolveStyle()` 在精确匹配落空时兜底取最近 2 篇**完成稿**作样本——宁可样本跨体裁，也好过模型一篇都没见过作者的文字；草稿不参与兜底，避免拿改到一半的稿子当风格范本。
+3. 素材截断改为放宽上限（3000）并保留头尾，省略处显式写明"（此处省略中间 N 字素材）"，不再让模型和作者都以为素材完整。
+4. 测试 2 项：`testRecentArticlesForSamplesFallsBackToAnyGenre`（方向写法不一致时精确匹配为空、兜底命中且排除草稿）、`testWritingContextBuilderKeepsTailOfLongMaterials`（长素材头尾均保留且带省略标注——旧实现输出以 `...` 结尾，该断言必然失败）。
+
+**明确不实施：评测对齐样本注入**。原计划让 `EvalPipelineFacade` 也走 `resolveStyle()` 同款注入（现状是 `styleProfile(forDirection:)` 直取，`resolveStyle` 出现 0 次，评测量的是零样本配置）。审查中发现这会**污染量具**：评测用例按"一鱼两吃"惯例取自作者真实文章，`articles.id=15`（香菱，2053 字）即 case-27 正文（2055 字，开头逐字相同），`id=11`（鸳鸯）即 case-25/26 源文。naive 注入会把答案当风格样本喂回模型，照抄即得高分。且 idea 侧孪生用例（case-28）正文为空、仅凭 idea 生成，靠正文指纹无法识别同源，自动排除不可靠。两条可行设计留待作者裁决：(a) 用例 JSON 显式声明 `source_article_id` 并排除，代价是每条新用例都要维护、漏填即静默重新开洞；(b) 评测报告显式列出注入了哪几篇样本，用可见性代替自动判定。**在裁决前，评测分数应理解为 App 真实质量的下界**（App 有 few-shot，评测没有）。
+
+**未处理**：`outline_excerpt` 仍是 1200 字 prefix-only 截断（同类缺陷，但无证据表明当前用量下会触发，暂不动）。`resolveStyle` 的兜底分支只有数据库层测试覆盖，未加 WorkshopStore 级行为测试。
+
+**作者侧待办（代码无法代劳）**：作者雷区 `known_pitfalls` 仍为空，57 条诊断的原料已就绪，但按 `MemoryLoopService` 铁律"归纳只产候选、写库只发生在作者逐条确认之后"，确认是编辑判断，须由作者在 App 内完成。编辑偏好 `learned_preferences` 仍卡在 `edit_records = 0`（从不发布），依赖 24.1 的发布闭环。

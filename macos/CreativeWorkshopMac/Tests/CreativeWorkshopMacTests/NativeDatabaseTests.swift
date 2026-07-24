@@ -891,6 +891,45 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertTrue(review.user_template.contains("resolved_from_last"), "缺已解决问题字段，改对了也不记分")
     }
 
+    /// 回归：体裁匹配是字符串精确相等，而 articles.genre 存的是保存时的写作方向原文，
+    /// 方向换个说法样本就归零（作者库里"经典文学解读"匹配 0 篇，文章却标着"文学原著"）。
+    /// genre 传 nil 表示不限体裁，供 resolveStyle 落空时兜底，保证模型至少见过作者的文字。
+    func testRecentArticlesForSamplesFallsBackToAnyGenre() throws {
+        let database = try makeDatabase()
+        _ = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "叹香菱",
+                content: "菱花空对雪澌澌",
+                summary: "摘要",
+                status: "已归档",
+                tags: [],
+                related_topic_id: nil,
+                genre: "文学原著"
+            )
+        )
+
+        _ = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "改到一半的稿",
+                content: "半成品",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "情感文学"
+            )
+        )
+
+        // 方向写法不一致 → 精确匹配落空
+        XCTAssertTrue(try database.recentArticlesForSamples(genre: "经典文学解读").isEmpty)
+        XCTAssertEqual(try database.recentArticlesForSamples(genre: "文学原著").count, 1)
+        // 兜底：不限体裁时能取到文章，且只取完成稿——草稿不能当风格范本
+        let fallback = try database.recentArticlesForSamples(genre: nil, finishedOnly: true)
+        XCTAssertEqual(fallback.map(\.title), ["叹香菱"])
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
