@@ -316,6 +316,43 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertTrue(context.style_brief.contains("克制"))
     }
 
+    /// 回归：素材是逐条累加的，此前按 1000 字掐尾截断——作者最后加进来的素材最先消失，
+    /// 且界面无提示。现在保留头尾并显式写明省略了多少字。
+    func testWritingContextBuilderKeepsTailOfLongMaterials() {
+        let head = String(repeating: "头", count: 2_000)
+        let tail = String(repeating: "尾", count: 2_000)
+        let context = WritingContextBuilder().build(
+            title: "标题",
+            summary: "",
+            content: "",
+            outline: "",
+            idea: "想法",
+            direction: "情感文学",
+            materials: head + tail,
+            style: StyleProfile(
+                id: 1,
+                name: "测试风格",
+                language_style: "中文",
+                tone: "克制",
+                structure_preference: "先场景后观察",
+                favorite_expressions: "",
+                forbidden_expressions: "不要标题党",
+                sample_texts: [],
+                title_style_like: nil,
+                title_style_dislike: nil,
+                is_default: 1
+            ),
+            selectedTopic: nil,
+            recentArticles: [],
+            recentReviews: [],
+            ideas: []
+        )
+
+        XCTAssertTrue(context.materials_excerpt.hasPrefix("头"), "开头素材应保留")
+        XCTAssertTrue(context.materials_excerpt.hasSuffix("尾"), "结尾素材不能再被掐掉")
+        XCTAssertTrue(context.materials_excerpt.contains("此处省略中间"), "省略应显式标注，不能静默丢弃")
+    }
+
     func testWritingAdvisorFallbackSuggestsDraftFromOutline() {
         let context = ContextPackage(
             stage: "大纲阶段",

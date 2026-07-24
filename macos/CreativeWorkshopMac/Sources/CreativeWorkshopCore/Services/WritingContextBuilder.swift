@@ -39,7 +39,7 @@ package struct WritingContextBuilder {
             direction: direction.trimmingCharacters(in: .whitespacesAndNewlines),
             outline_excerpt: truncate(trimmedOutline, limit: 1_200),
             content_excerpt: excerptContent(trimmedContent),
-            materials_excerpt: truncate(materials.trimmingCharacters(in: .whitespacesAndNewlines), limit: 1_000),
+            materials_excerpt: excerptMaterials(materials.trimmingCharacters(in: .whitespacesAndNewlines)),
             selected_topic_title: selectedTopic?.title,
             selected_topic_summary: selectedTopicSummary(selectedTopic),
             style_name: style.name,
@@ -75,6 +75,18 @@ package struct WritingContextBuilder {
             return "构思阶段"
         }
         return "空白阶段"
+    }
+
+    /// 素材是逐条累加的（作者每次「用于本次写作」都会往正文素材块后追加），此前按 1000 字
+    /// 掐尾截断，结果是**最后加进来的素材最先消失**，且界面无任何提示。改为放宽上限并保留
+    /// 头尾，省略处显式写明丢了多少字，不再让模型和作者都以为素材是完整的（24.3）。
+    private func excerptMaterials(_ text: String) -> String {
+        guard text.count > 3_000 else {
+            return text
+        }
+        let prefix = text.prefix(1_800)
+        let suffix = text.suffix(1_000)
+        return "\(prefix)\n\n（此处省略中间 \(text.count - 2_800) 字素材）\n\n\(suffix)"
     }
 
     private func excerptContent(_ content: String) -> String {

@@ -256,32 +256,36 @@ package final class NativeDatabase {
     }
 
     /// 供体裁化 few-shot 样本抽取：最近同体裁、已完成/已发布/已归档的文章正文（18.3.4）。
-    package func recentArticlesForSamples(genre: String, excludingArticleID: Int? = nil, limit: Int = 3) throws -> [Article] {
-        let trimmed = genre.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return []
-        }
+    /// `genre` 传 nil 或空串表示**不限体裁**——供精确匹配落空时兜底取近期完成稿（24.3）。
+    /// `finishedOnly` 排除草稿：跨体裁兜底时宁可少给，也不要拿改到一半的稿子当风格范本。
+    package func recentArticlesForSamples(
+        genre: String?,
+        excludingArticleID: Int? = nil,
+        limit: Int = 3,
+        finishedOnly: Bool = false
+    ) throws -> [Article] {
+        let trimmed = (genre ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let safeLimit = max(1, min(limit, 10))
-        if let excludingArticleID {
-            return try rows(
-                """
-                \(articleSelectSQL)
-                WHERE genre = ? AND id != ? AND status IN ('已发布', '已归档', '草稿')
-                      AND content IS NOT NULL AND trim(content) != ''
-                ORDER BY updated_at DESC LIMIT ?
-                """,
-                [trimmed, excludingArticleID, safeLimit],
-                mapper: article
-            )
+        var conditions: [String] = []
+        var bindings: [Any?] = []
+        if !trimmed.isEmpty {
+            conditions.append("genre = ?")
+            bindings.append(trimmed)
         }
+        if let excludingArticleID {
+            conditions.append("id != ?")
+            bindings.append(excludingArticleID)
+        }
+        conditions.append(finishedOnly ? "status IN ('已发布', '已归档')" : "status IN ('已发布', '已归档', '草稿')")
+        conditions.append("content IS NOT NULL AND trim(content) != ''")
+        bindings.append(safeLimit)
         return try rows(
             """
             \(articleSelectSQL)
-            WHERE genre = ? AND status IN ('已发布', '已归档', '草稿')
-                  AND content IS NOT NULL AND trim(content) != ''
+            WHERE \(conditions.joined(separator: " AND "))
             ORDER BY updated_at DESC LIMIT ?
             """,
-            [trimmed, safeLimit],
+            bindings,
             mapper: article
         )
     }
