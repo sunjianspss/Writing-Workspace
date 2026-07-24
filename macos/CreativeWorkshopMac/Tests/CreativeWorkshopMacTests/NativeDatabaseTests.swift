@@ -871,6 +871,26 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertEqual(untouched.is_default, 1)
     }
 
+    /// 回归：App 的写作诊断实际走 DB 里的 seed 模板（promptTemplate 非 nil 就会短路掉
+    /// NativePrompts 里的内联 prompt）。该模板一度缺评分锚点、缺 {{previous_review}}，
+    /// 导致同一份逐字节相同的正文三次诊断给出 58/72/73，且第二次诊断读不到上一次结论。
+    func testSeededWritingReviewTemplateCarriesAnchorsAndPreviousReview() throws {
+        let database = try makeDatabase()
+        let review = try XCTUnwrap(try database.promptTemplate(key: .writingReview))
+
+        XCTAssertTrue(review.user_template.contains("评分锚点"), "写作诊断模板缺评分锚点，分数会向 70 分档塌缩")
+        XCTAssertTrue(review.user_template.contains("90–100"), "评分锚点缺分档定义")
+        XCTAssertTrue(
+            review.user_template.contains("分数必须与 issues 清单一致"),
+            "缺一致性约束，分数会与问题清单脱钩"
+        )
+        XCTAssertTrue(
+            review.user_template.contains("{{previous_review}}"),
+            "模板没有 previous_review 占位符，上一次诊断会被 replacePlaceholders 静默丢弃"
+        )
+        XCTAssertTrue(review.user_template.contains("resolved_from_last"), "缺已解决问题字段，改对了也不记分")
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
