@@ -2592,3 +2592,24 @@ schema 变更走 `PRAGMA user_version` 迁移。
 3. 落点：`WorkshopStore+PublishFlow.swift`（薄扩展，遵守 21.5 护栏）+ `ComposerView` 两处状态控件；测试 4 项（未发布归档触发确认且状态不变、组合动作走完整链并产生 edit_records 与终审、已发布归档不打扰、指示条站点推导）。
 
 **已知边界**：`saveArticle` 以"已归档"直接保存的路径暂未加护栏（少见路径，观察真实使用后再定）。
+
+### 24.2 写作诊断评分失真与 prompt 路径断链（已实施，2026-07-25）
+
+**背景**：作者反馈"真实写作/改写的输出质量一般，按诊断改全文后再诊断，分数反而大幅下降"。查 `writing_reviews` 表得到决定性证据——`reviewed_snapshot` 逐字节相同的两组记录：id 28/29/30 给出 58/72/73（极差 15），id 33/34 给出 85/72（正文一字未改，掉 13 分）。另有 id 42（4 个问题）得 82、id 45（3 个问题）得 72，分数与 issues 清单脱钩。结论：作者观察到的"改完更差"主要是量具噪声，不是质量退化。
+
+**根因（prompt 路径断链）**：`WorkshopStore.performReviewCurrentDraft` 传入 `promptTemplate(for: .writingReview)`，而 `seedPromptTemplatesIfNeeded` 建库即写入该 key，模板恒非 nil；`NativePrompts.writingReview` 一旦收到 template 就直接 return，导致内联 prompt（文学向维度、核心问题优先、上一次诊断对比、`resolved_from_last`）**在 App 内从未执行过**。实际生效的是 590 字符的精简 seed 模板：无评分锚点、无 `{{previous_review}}` 占位符（变量照常传入但被 `replacePlaceholders` 静默丢弃）、无 `resolved_from_last`。第 22 章"评测仪器修缮"当时只给 eval 路径加了锚点模板（`EvalPipelineFacade.scoringTemplate`，注释明写"不改动 App 内写作教练的默认 prompt"）——**仪器修好了，教练没修**，两把尺子互不可比。低温不解此题：`writingReview` 默认温度已是 0.2，仍抖 15 分，病根在 prompt 缺约束。
+
+**实施**：
+1. **锚点共用常量** `NativePrompts.scoreAnchorBlock`：五档分数定义（90–100/80–89/70–79/60–69/0–59）+ "分数必须与 issues 清单一致"约束，内联 prompt 与 seed 模板共同插值引用，从结构上消除两条路径再次漂移的可能（本次故障的根因类别）。
+2. **seed 模板补齐至内联版平价**：加回文学向维度（人称视角/意象与细节/留白与节奏/情感真实度/文本引用关系/语言腔调）、"先判断最核心问题不要泛泛夸奖"、体裁判别规则、`{{previous_review}}` 占位符与 `resolved_from_last` 输出字段——第二次诊断从此能认账"上次的问题已改好"。
+3. **改写 prompt 去重**：`improveDraftFromReview` 的上下文 JSON 里清空 `content_excerpt`，此前它带的是 1000+800 截断副本（中间挖成 `...`），与下方完整正文并存互相干扰。
+4. 落点：`NativePrompts.swift`；测试 1 项（`testSeededWritingReviewTemplateCarriesAnchorsAndPreviousReview`，断言 App 实际取用的 DB 模板含锚点/一致性约束/`{{previous_review}}`/`resolved_from_last`——五条断言对修复前的线上模板全部失败）。
+
+**迁移**：无需手写迁移。`seedPromptTemplatesIfNeeded` 的刷新分支只更新 `is_default = 1 AND updated_at = created_at` 的行；作者本机该行正符合条件，下次启动自动生效。作者若曾手改过写作诊断模板则不会被覆盖（设计如此），需手动同步。
+
+**验证口径**：拿同一份文本连诊断三次，看极差能否从 15 分收窄到 5 分以内。此项为廉价现场验证，不需跑全量评测。
+
+**已知边界与待观察**：
+- `previousReviewBlock` 仍会把上一次分数原样喂给模型，理论上存在锚定/对抗性偏移；本次未动（无证据支持改动），留待三连诊断数据观察。
+- 内联 prompt 与 seed 模板仍是两份文案（仅锚点已共用）。彻底消除重复需让 seed 由内联 prompt 派生，属结构性改动，本次未做。
+- App 诊断分数与评测分数现已同锚点，理论上可比；历史 `writing_reviews` 分数是无锚点版打的，**不可与新分数混作趋势**。

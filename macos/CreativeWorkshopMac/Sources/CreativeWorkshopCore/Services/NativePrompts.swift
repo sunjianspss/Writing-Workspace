@@ -444,6 +444,10 @@ package enum NativePrompts {
         review: WritingReview,
         style: StyleProfile
     ) -> [ChatMessage] {
+        // 完整正文在下方单独给出，上下文 JSON 里再带一份 1000+800 截断副本（中间挖成 "..."）
+        // 只会与完整正文互相干扰，这里清空它。
+        var contextForPrompt = context
+        contextForPrompt.content_excerpt = ""
         let prompt = """
         你是我的中文长文主编。请根据写作教练诊断，对整篇文章做一次全文修订。
 
@@ -454,7 +458,7 @@ package enum NativePrompts {
         \(samplesBlock(style))
 
         【当前写作上下文 JSON】
-        \(contextJSON(context))
+        \(contextJSON(contextForPrompt))
 
         【当前完整正文】
         \(content)
@@ -484,6 +488,19 @@ package enum NativePrompts {
             ChatMessage(role: "user", content: prompt)
         ], mode: .reviewDrivenRevision)
     }
+
+    /// 写作诊断评分锚点。不给锚点时模型评分会向 70 分档塌缩、且与 issues 清单脱钩——
+    /// 实测同一份逐字节相同的正文，三次诊断给出 58/72/73，极差 15 分。
+    /// 内联 prompt 与 seed 模板共用这一份文案，避免两条路径再次漂移（本次修复的根因）。
+    static let scoreAnchorBlock = """
+    评分锚点（必须落到锚点上，不要给 70 分档的"安全分"）：
+    - 90–100：可直接发表。结构完整推进、细节具体真实、无任何高危问题、无腔调问题
+    - 80–89：小修可发。主线清楚有推进，只有 1–2 处中低危问题
+    - 70–79：中修。存在 1 处高危问题，或 3 处以上中危问题，或细节明显单薄
+    - 60–69：大修。偏题、结构断裂、大段空泛议论或多处高危问题
+    - 0–59：需重写。跑题、明显截断、大量套话或腔调失控
+    分数必须与 issues 清单一致：有高危问题不得进入 80 档；没有任何问题不应停留在 70 档。
+    """
 
     package static func writingReview(
         context: ContextPackage,
@@ -553,6 +570,8 @@ package enum NativePrompts {
         9. 如果作者风格说明中列出了"作者常见雷区"，重点检查这些问题是否再次出现
         10. 如果作者风格说明列出了"作者常见雷区"，逐条判断本文是否再次命中：
            命中的雷区写入 pitfall_hits（原样抄写雷区描述），未命中不要写。
+
+        \(scoreAnchorBlock)
 
         请只输出 JSON，不要输出 Markdown 代码块：
         {
@@ -1293,7 +1312,7 @@ package enum NativePrompts {
                 name: PromptTemplateKey.writingReview.title,
                 system_prompt: "你是严谨的中文写作教练，只输出用户要求的 JSON。",
                 user_template: """
-                请诊断当前文章，目标是帮助作者提高写作能力，不要代写。
+                请诊断当前文章，目标是帮助作者提高写作能力，不要代写、不要重写全文。
 
                 【方向】{{direction}}
                 【想法】{{idea}}
@@ -1303,11 +1322,28 @@ package enum NativePrompts {
                 【正文】{{content}}
                 【作者风格】{{style_description}}
 
-                先判断文章体裁：只在个人叙事、情感随笔类体裁才建议加入个人感悟或生活体验；原著解读、书评、科普等体裁以忠实原文为先，不要建议加入个人体验。
-                如果作者风格说明列出了"作者常见雷区"，逐条判断本文是否再次命中：命中的雷区写入 pitfall_hits（原样抄写雷区描述），未命中不要写。
+                【上一次诊断】
+                {{previous_review}}
+
+                诊断要求：
+                1. 先判断这篇文章最核心的问题，不要泛泛夸奖
+                2. 维度不限于开头/结构/观点/素材/表达/节奏/风格；如果是文学写作方向，
+                   优先使用这些更具体的文学向维度：人称视角、意象与细节、留白与节奏、情感真实度、
+                   文本引用关系（经典/素材引用是否服务于个人表达）、语言腔调（是否滑向文艺腔/鸡汤腔/营销腔）
+                3. 每个问题都要引用原文片段并给出可执行的修改建议
+                4. 先判断文章体裁：只在个人叙事、情感随笔类体裁才建议加入个人感悟或生活体验；
+                   原著解读、书评、科普等体裁以忠实原文为先，不要建议加入个人体验
+                5. 保留作者个人表达，不要建议改成营销腔、培训腔或标题党
+                6. 如果存在"上一次诊断"，先逐条判断其中的问题这次是否已经解决：
+                   已解决的写入 resolved_from_last，不要在 issues 里重复列出；
+                   issues 只列仍未解决的问题和新出现的问题
+                7. 如果作者风格说明列出了"作者常见雷区"，逐条判断本文是否再次命中：
+                   命中的雷区写入 pitfall_hits（原样抄写雷区描述），未命中不要写
+
+                \(scoreAnchorBlock)
 
                 请只输出 JSON：
-                {"summary":"一句话诊断","overall_score":72,"strengths":["优点"],"issues":[{"dimension":"开头/结构/观点/素材/表达/节奏/风格","severity":"高/中/低","excerpt":"可选原文","problem":"问题","suggestion":"建议"}],"revision_plan":["修改步骤"],"training_focus":["训练重点"],"style_notes":["风格观察"],"pitfall_hits":["命中的雷区原文描述，未命中留空数组"]}
+                {"summary":"一句话诊断","overall_score":72,"strengths":["优点"],"issues":[{"dimension":"维度","severity":"高/中/低","excerpt":"原文片段","problem":"问题","suggestion":"建议"}],"revision_plan":["修改步骤"],"training_focus":["训练重点"],"style_notes":["风格观察"],"resolved_from_last":["上一次诊断中这次已解决的问题，没有历史或没有解决的留空数组"],"pitfall_hits":["命中的雷区原文描述，未命中留空数组"]}
                 """
             ),
             PromptTemplateSeed(
