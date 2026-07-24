@@ -48,7 +48,13 @@ func run() async -> Int32 {
             cases = try CaseFilter.apply(requestedCaseIDs, to: cases)
         }
 
-        let facade = try EvalPipelineFacade(apiKey: apiKey)
+        let styleSamples = try EvalStyleSampleLoader.load(from: evalsDir.appendingPathComponent("style_samples"))
+        if styleSamples.isEmpty {
+            print("未找到 evals/style_samples 下的风格样本，本轮按零样本配置运行。")
+        } else {
+            print("注入风格样本 \(styleSamples.count) 篇：\(styleSamples.map(\.name).joined(separator: "、"))")
+        }
+        let facade = try EvalPipelineFacade(apiKey: apiKey, styleSamples: styleSamples.map(\.text))
         let runner = PipelineRunner(facade: facade)
 
         // 增量落盘（评测韧性修缮）：run 元信息与结果库在循环前就绪，每个 outcome 完成即入库，
@@ -104,7 +110,8 @@ func run() async -> Int32 {
             runTimestamp: runTimestamp,
             gitDescribe: gitDescribe,
             outcomes: outcomes,
-            previousScores: previousScores
+            previousScores: previousScores,
+            styleSampleNames: styleSamples.map(\.name)
         )
         try FileManager.default.createDirectory(at: reportsDir, withIntermediateDirectories: true)
         let reportFileName = runTimestamp.replacingOccurrences(of: ":", with: "-") + ".md"

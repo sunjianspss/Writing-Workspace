@@ -8,7 +8,8 @@ enum ReportGenerator {
         runTimestamp: String,
         gitDescribe: String,
         outcomes: [PipelineOutcome],
-        previousScores: [String: Int]
+        previousScores: [String: Int],
+        styleSampleNames: [String] = []
     ) -> String {
         var lines: [String] = []
         lines.append("# 写作质量评测报告")
@@ -16,6 +17,10 @@ enum ReportGenerator {
         lines.append("- run_id：\(runID)")
         lines.append("- 时间：\(runTimestamp)")
         lines.append("- git：\(gitDescribe)")
+        // 注入了哪几篇风格样本必须写进报告：样本换了分数就不可比，而"样本是否同时是某条
+        // 用例的来源"无法可靠自动判定（正文可能带 frontmatter，idea 侧孪生更无从比对），
+        // 只能靠可见性让人复核（24.4）。
+        lines.append("- 风格样本：\(styleSampleNames.isEmpty ? "无（零样本配置）" : styleSampleNames.joined(separator: "、"))")
         lines.append("")
 
         var seenCaseIDs = Set<String>()
