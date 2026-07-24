@@ -107,10 +107,20 @@ package struct EvalPipelineFacade {
     private let executor: AIWorkflowExecuting
     private let config: ModelConfig
     private let apiKey: String
+    /// 固定的评测风格样本（24.4）。App 的 `resolveStyle()` 会注入近期同体裁文章作 few-shot，
+    /// 评测此前完全跳过这一步，量的是一个作者实际用不到的「零样本」配置。这里补上，但样本
+    /// 来自版本控制的固定文件而非活库——量具的配置必须固定，否则分数会随语料增长漂移。
+    private let styleSamples: [String]
 
-    package init(apiKey: String, executor: AIWorkflowExecuting = NativeAIClient(), databaseURL: URL? = nil) throws {
+    package init(
+        apiKey: String,
+        executor: AIWorkflowExecuting = NativeAIClient(),
+        databaseURL: URL? = nil,
+        styleSamples: [String] = []
+    ) throws {
         self.apiKey = apiKey
         self.executor = executor
+        self.styleSamples = styleSamples
         self.database = try NativeDatabase(databaseURL: databaseURL)
         self.config = try database.modelConfig()
     }
@@ -120,7 +130,10 @@ package struct EvalPipelineFacade {
     }
 
     package func run(pipeline: String, evalCase: EvalCaseInput) async throws -> EvalPipelineOutcome {
-        let style = try database.styleProfile(forDirection: evalCase.direction)
+        var style = try database.styleProfile(forDirection: evalCase.direction)
+        if !styleSamples.isEmpty {
+            style.sample_texts = styleSamples + (style.sample_texts ?? [])
+        }
         switch pipeline {
         case "direct":
             return try await runDirect(evalCase, style: style)

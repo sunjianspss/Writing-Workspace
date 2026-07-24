@@ -191,5 +191,21 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         XCTAssertTrue(report.contains("-2"))
         XCTAssertTrue(report.contains("验证：3 项中有 1 项待复核。"))
         XCTAssertTrue(report.contains("检索次数"), "报告表头应包含检索次数列（PRD 23.8.1）")
+        XCTAssertTrue(report.contains("风格样本：无（零样本配置）"), "未注入样本时报告应写明是零样本配置（24.4）")
+    }
+
+    /// 注入了哪几篇风格样本必须写进报告：样本换了分数就不可比，而「样本是否同时是某条用例
+    /// 的来源」无法可靠自动判定，只能靠报告里的可见性让人复核（24.4）。
+    func testReportRecordsInjectedStyleSampleNames() {
+        let report = ReportGenerator.generate(
+            runID: "run-3",
+            runTimestamp: "2026-07-25T12:00:00Z",
+            gitDescribe: "abc123",
+            outcomes: [],
+            previousScores: [:],
+            styleSampleNames: ["01-时间扑面而来", "02-清白的人"]
+        )
+
+        XCTAssertTrue(report.contains("风格样本：01-时间扑面而来、02-清白的人"))
     }
 }
