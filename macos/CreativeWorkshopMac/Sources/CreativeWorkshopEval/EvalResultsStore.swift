@@ -127,10 +127,12 @@ final class EvalResultsStore {
     }
 
     /// 严格早于给定时间戳的最近一次 run 里，各 case_id+pipeline 的 overall_score，供报告算差值。
+    /// 只取成功样本（24.9）：失败样本的分数是兜底稿或本地启发式算出来的，当过"上次总分"就会
+    /// 凭空造出一列差值——7-24 那轮报告的 -18/-27/-28 全部来自此处。
     func previousRunScores(before runTimestamp: String) throws -> [String: Int] {
         let sql = """
         SELECT case_id, pipeline, overall_score FROM eval_results
-        WHERE run_id = (
+        WHERE success = 1 AND run_id = (
             SELECT run_id FROM eval_results
             WHERE run_timestamp < ?
             ORDER BY run_timestamp DESC
@@ -153,6 +155,77 @@ final class EvalResultsStore {
             result[key] = Int(sqlite3_column_int(statement, 2))
         }
         return result
+    }
+
+    /// 断点续跑（24.9）用的 run 元信息：最近一次 run 的 id/时间戳/git。
+    /// 全量一轮 112 格约 8 小时，行是增量落盘的，但此前没有任何续跑入口——中断就得从
+    /// case-01 重烧一遍模型时间。
+    func latestRun() throws -> (runID: String, runTimestamp: String, gitDescribe: String)? {
+        let sql = """
+        SELECT run_id, run_timestamp, git_describe FROM eval_results
+        ORDER BY run_timestamp DESC, id DESC LIMIT 1
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw EvalStoreError.prepare(message: lastErrorMessage)
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let runIDText = sqlite3_column_text(statement, 0),
+              let timestampText = sqlite3_column_text(statement, 1),
+              let gitText = sqlite3_column_text(statement, 2) else {
+            return nil
+        }
+        return (String(cString: runIDText), String(cString: timestampText), String(cString: gitText))
+    }
+
+    /// 指定 run 里已经跑成功的 `case_id|pipeline`。只认成功样本：失败的格子续跑时应当重跑，
+    /// 而不是把一个无效结果留在报告里（24.9）。
+    func completedPairs(runID: String) throws -> Set<String> {
+        let sql = "SELECT case_id, pipeline FROM eval_results WHERE run_id = ? AND success = 1"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw EvalStoreError.prepare(message: lastErrorMessage)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, runID, -1, sqliteTransient)
+
+        var pairs: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let caseIDText = sqlite3_column_text(statement, 0),
+                  let pipelineText = sqlite3_column_text(statement, 1) else { continue }
+            pairs.insert("\(String(cString: caseIDText))|\(String(cString: pipelineText))")
+        }
+        return pairs
+    }
+
+    /// 指定 run 已入库的结果，供续跑时把报告补成整轮。同一格子重跑过的话后写入的行胜出
+    /// （按 id 升序读、同键覆盖）。
+    func outcomes(runID: String) throws -> [PipelineOutcome] {
+        let sql = "SELECT case_id, pipeline, raw_json FROM eval_results WHERE run_id = ? ORDER BY id ASC"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw EvalStoreError.prepare(message: lastErrorMessage)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, runID, -1, sqliteTransient)
+
+        let decoder = JSONDecoder()
+        var byPair: [String: PipelineOutcome] = [:]
+        var order: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let caseIDText = sqlite3_column_text(statement, 0),
+                  let pipelineText = sqlite3_column_text(statement, 1),
+                  let rawJSONText = sqlite3_column_text(statement, 2) else { continue }
+            let key = "\(String(cString: caseIDText))|\(String(cString: pipelineText))"
+            guard let data = String(cString: rawJSONText).data(using: .utf8),
+                  let outcome = try? decoder.decode(PipelineOutcome.self, from: data) else { continue }
+            if byPair[key] == nil {
+                order.append(key)
+            }
+            byPair[key] = outcome
+        }
+        return order.compactMap { byPair[$0] }
     }
 
     private func execute(_ sql: String) throws {

@@ -26,6 +26,9 @@ func run() async -> Int32 {
             .filter { !$0.isEmpty }
     }
 
+    // 断点续跑（24.9）：全量一轮 112 格约 8 小时，中断后此前只能从 case-01 重烧。
+    let resumeRequested = arguments.contains("--resume")
+
     let apiKey = EvalPipelineFacade.readAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
     guard !apiKey.isEmpty else {
         FileHandle.standardError.write((EvalError.missingAPIKey.errorDescription ?? "缺少 API Key").appending("\n").data(using: .utf8)!)
@@ -59,20 +62,45 @@ func run() async -> Int32 {
 
         // 增量落盘（评测韧性修缮）：run 元信息与结果库在循环前就绪，每个 outcome 完成即入库，
         // 中断不再丢已完成的数据。previousScores 必须在本轮任何插入之前读取。
-        let runID = UUID().uuidString
-        let timestampFormatter = ISO8601DateFormatter()
-        let runTimestamp = timestampFormatter.string(from: Date())
-        let gitDescribe = GitDescribe.current(repositoryPath: cwd)
+        let currentGit = GitDescribe.current(repositoryPath: cwd)
         let store = try EvalResultsStore(databaseURL: resultsDBURL)
+
+        let runID: String
+        let runTimestamp: String
+        var reportGitDescribe = currentGit
+        // 续跑沿用上一轮的 run_id 与时间戳：报告因此补成整轮，而不是留下两份各跑一半的报告。
+        // 新跑出来的行记当前的 git describe（它们确实由当前代码产出），报告头把两者都写出来。
+        var completedPairs: Set<String> = []
+        var outcomes: [PipelineOutcome] = []
+        if resumeRequested {
+            guard let latest = try store.latestRun() else {
+                FileHandle.standardError.write("库里没有可续跑的 run（evals/eval_results.sqlite3 为空）。\n".data(using: .utf8)!)
+                return 1
+            }
+            runID = latest.runID
+            runTimestamp = latest.runTimestamp
+            completedPairs = try store.completedPairs(runID: latest.runID)
+            outcomes = try store.outcomes(runID: latest.runID)
+            if latest.gitDescribe != currentGit {
+                reportGitDescribe = "\(latest.gitDescribe) → \(currentGit)（续跑）"
+            }
+            print("续跑 run \(latest.runID)（\(latest.runTimestamp)）：已有 \(completedPairs.count) 格成功结果，本次只跑缺口。")
+        } else {
+            runID = UUID().uuidString
+            runTimestamp = ISO8601DateFormatter().string(from: Date())
+        }
         let previousScores = try store.previousRunScores(before: runTimestamp)
         let encoder = JSONEncoder()
 
-        var outcomes: [PipelineOutcome] = []
         var offlineWaits = 0
         var abortedByOffline = false
 
         caseLoop: for evalCase in cases {
             for pipeline in pipelines {
+                if completedPairs.contains("\(evalCase.id)|\(pipeline)") {
+                    print("跳过 \(evalCase.id) / \(pipeline)（已有成功结果）")
+                    continue
+                }
                 while true {
                     print("运行 \(evalCase.id) / \(pipeline) ...")
                     let outcome = try await runner.run(pipeline: pipeline, evalCase: evalCase)
@@ -93,8 +121,13 @@ func run() async -> Int32 {
 
                     offlineWaits = 0
                     let rawJSON = String(data: try encoder.encode(outcome), encoding: .utf8) ?? "{}"
-                    try store.insert(runID: runID, runTimestamp: runTimestamp, gitDescribe: gitDescribe, outcome: outcome, rawJSON: rawJSON)
-                    outcomes.append(outcome)
+                    try store.insert(runID: runID, runTimestamp: runTimestamp, gitDescribe: currentGit, outcome: outcome, rawJSON: rawJSON)
+                    // 续跑重跑过的格子要替换掉库里读回来的旧结果，否则报告会展示那条已被作废的行。
+                    if let existing = outcomes.firstIndex(where: { $0.caseID == outcome.caseID && $0.pipeline == outcome.pipeline }) {
+                        outcomes[existing] = outcome
+                    } else {
+                        outcomes.append(outcome)
+                    }
                     break
                 }
             }
@@ -108,7 +141,7 @@ func run() async -> Int32 {
         let report = ReportGenerator.generate(
             runID: runID,
             runTimestamp: runTimestamp,
-            gitDescribe: gitDescribe,
+            gitDescribe: reportGitDescribe,
             outcomes: outcomes,
             previousScores: previousScores,
             styleSampleNames: styleSamples.map(\.name),
