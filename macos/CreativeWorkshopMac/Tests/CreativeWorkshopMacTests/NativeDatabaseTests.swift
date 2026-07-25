@@ -930,6 +930,48 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertEqual(fallback.map(\.title), ["叹香菱"])
     }
 
+    /// PRD 24.8：编辑量基准必须是**模型产出**的版本。覆盖保存也会记一条 confirmed 版本，
+    /// 内容就是作者当下的正文；拿它当基准，编辑比例结构上恒为 0。
+    func testLatestModelDraftVersionSkipsManualSaveSnapshots() throws {
+        let database = try makeDatabase()
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "叹香菱",
+                content: "作者手改后的正文",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "文学原著"
+            )
+        )
+        _ = try database.saveDraftVersion(
+            articleID: article.id,
+            titleSnapshot: "叹香菱",
+            action: "定点改写·语言腔调",
+            note: "",
+            before: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "模型给的正文"),
+            after: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "模型改写后的正文")
+        )
+        _ = try database.saveDraftVersion(
+            articleID: article.id,
+            titleSnapshot: "叹香菱",
+            action: DraftVersionAction.manualSave,
+            note: "",
+            before: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "模型改写后的正文"),
+            after: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "作者手改后的正文")
+        )
+
+        let baseline = try XCTUnwrap(database.latestModelDraftVersion(articleID: article.id))
+
+        XCTAssertEqual(baseline.action, "定点改写·语言腔调", "基准应跳过覆盖保存留下的版本")
+        // 拿模型那版做基准，编辑量才量得出作者改了多少。
+        let record = try database.saveEditRecord(article: article, draftVersion: baseline)
+        XCTAssertGreaterThan(record.added_characters + record.removed_characters, 0)
+        XCTAssertNotEqual(record.edit_level, "zero")
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)

@@ -1609,6 +1609,12 @@ package struct DraftSnapshot: Codable, Hashable {
     }
 }
 
+/// 草稿版本的 action 取值里唯一"非模型产出"的一个：覆盖保存留痕。编辑量基准要排除它
+/// （见 `NativeDatabase.latestModelDraftVersion`），因此提成常量，写库和查库共用一处。
+package enum DraftVersionAction {
+    package static let manualSave = "保存文章"
+}
+
 package struct DraftVersion: Codable, Identifiable, Hashable {
     package let id: Int
     package var article_id: Int?
