@@ -20,8 +20,22 @@ enum ReleaseGate {
             return Verdict(passed: false, lines: ["放行门：暂无 agentic 管线数据"])
         }
 
-        let agenticAvgScore = averageScore(agentic)
-        let deepAvgScore = averageScore(deep)
+        // 分数只算成功样本（24.9）：放行门是 L2 转默认的唯一裁决依据，一次网络超时就能把
+        // 兜底稿的分数混进平均值。调用次数与熔断率仍按全部样本算——成本和出岔子的概率是
+        // 管线的真实属性，把失败样本剔掉反而会把熔断率这一项本身抹平。
+        let agenticValid = agentic.filter(\.success)
+        let deepValid = deep.filter(\.success)
+        guard !agenticValid.isEmpty, !deepValid.isEmpty else {
+            return Verdict(
+                passed: false,
+                lines: [
+                    "放行门：有效样本不足（agentic \(agenticValid.count)/\(agentic.count)，deep \(deepValid.count)/\(deep.count)），本轮不判定"
+                ]
+            )
+        }
+
+        let agenticAvgScore = averageScore(agenticValid)
+        let deepAvgScore = averageScore(deepValid)
         let agenticAvgCallCount = averageCallCount(agentic)
         let deepAvgCallCount = averageCallCount(deep)
         let callCountThreshold = deepAvgCallCount * maxCallCountRatio
@@ -34,8 +48,10 @@ enum ReleaseGate {
 
         var lines: [String] = []
         lines.append(
-            String(format: "- rubric 平均总分：agentic %.2f，deep %.2f → %@",
-                   agenticAvgScore, deepAvgScore, scorePassed ? "通过" : "不通过")
+            String(format: "- rubric 平均总分：agentic %.2f（有效 %d/%d），deep %.2f（有效 %d/%d） → %@",
+                   agenticAvgScore, agenticValid.count, agentic.count,
+                   deepAvgScore, deepValid.count, deep.count,
+                   scorePassed ? "通过" : "不通过")
         )
         lines.append(
             String(format: "- 平均模型调用次数：agentic %.2f，deep %.2f（阈值 ≤ %.2f） → %@",

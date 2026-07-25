@@ -76,6 +76,14 @@ env SWIFTPM_CONFIG_PATH="$PWD/.swiftpm-state/config" \
 swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --pipelines direct,agent,deep
 ```
 
+全量一轮（28 用例 × 4 管线）约 8 小时。中断后用 `--resume` 续跑最近一次 run：已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮（PRD 24.9）。
+
+```bash
+swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --resume
+```
+
+失败的样本（超时、连接中断等）不再打分：报告头会点名「无效样本」，它们不计入差值，也不进放行门。
+
 ## 清理说明
 
 旧 Web / FastAPI 路径已经移出工作区，包括：

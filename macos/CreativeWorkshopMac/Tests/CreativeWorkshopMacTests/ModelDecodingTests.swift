@@ -1580,6 +1580,57 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(gateway.callCount, 1)
     }
 
+    /// 24.9：超时/连接中断/TLS 失败此前一次就降级到本地兜底稿——评测里成为无效样本，App 里是
+    /// 作者等了几分钟拿到一篇"本地模拟稿"。退避间隔在测试里传 0，只验重试行为本身。
+    func testAIWorkflowRunnerRetriesOnNetworkTimeoutThenSucceeds() async {
+        let gateway = SequencedModelGateway(steps: [
+            .failure(URLError(.timedOut)),
+            .failure(URLError(.networkConnectionLost)),
+            .output(#"{"title":"标题","content":"正文","summary":null,"tags":null,"raw_output":null}"#)
+        ])
+        let runner = AIWorkflowRunner(gateway: gateway, networkRetryBackoff: [0, 0])
+
+        let run = await runner.run(
+            endpoint: "network-retry-test",
+            messages: [ChatMessage(role: "user", content: "写一篇文章")],
+            config: ModelConfig(),
+            apiKey: "test-key",
+            fallback: DraftResult(title: "兜底", content: "本地兜底正文", summary: nil, tags: nil, raw_output: nil)
+        ) { content in
+            try WorkflowOutputDecoder.decode(content, as: DraftResult.self)
+        }
+
+        XCTAssertTrue(run.success, "两次网络抖动之后应当拿到真实模型输出，而不是兜底稿")
+        XCTAssertEqual(run.result.title, "标题")
+        XCTAssertEqual(gateway.callCount, 3)
+        XCTAssertTrue(run.inputSummary.contains("网络重试 2 次后成功"), "重试痕迹要能在 ai_calls 里看见：\(run.inputSummary)")
+    }
+
+    func testAIWorkflowRunnerFallsBackAfterNetworkRetriesExhausted() async {
+        let gateway = SequencedModelGateway(steps: [
+            .failure(URLError(.timedOut)),
+            .failure(URLError(.timedOut)),
+            .failure(URLError(.secureConnectionFailed))
+        ])
+        let runner = AIWorkflowRunner(gateway: gateway, networkRetryBackoff: [0, 0])
+        let fallback = DraftResult(title: "兜底", content: "本地兜底正文", summary: nil, tags: nil, raw_output: nil)
+
+        let run = await runner.run(
+            endpoint: "network-retry-test",
+            messages: [ChatMessage(role: "user", content: "写一篇文章")],
+            config: ModelConfig(),
+            apiKey: "test-key",
+            fallback: fallback
+        ) { content in
+            try WorkflowOutputDecoder.decode(content, as: DraftResult.self)
+        }
+
+        XCTAssertFalse(run.success)
+        XCTAssertEqual(run.result.title, fallback.title)
+        XCTAssertEqual(gateway.callCount, 3, "重试次数由退避数组长度决定，不该无限重试")
+        XCTAssertTrue(run.error.contains("网络重试 2 次后仍失败"), "错误里要写明重试过：\(run.error)")
+    }
+
     func testAIWorkflowRunnerStreamsPartialOutputAndDecodesAccumulatedResult() async {
         let gateway = StaticStreamingModelGateway(steps: [
             .chunks([#"{"title":"标题","#, #""content":"正文","summary":null,"tags":null,"raw_output":null}"#])

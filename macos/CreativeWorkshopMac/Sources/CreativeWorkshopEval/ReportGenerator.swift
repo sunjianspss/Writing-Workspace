@@ -25,6 +25,17 @@ enum ReportGenerator {
         // 生成动作用的是库内模板（与 App 同源，24.5），模板换了分数同样不可比；作者手改过的
         // 模板会标「作者自定义」，提醒复核这一轮量的到底是不是内置 prompt。
         lines.append("- Prompt 模板：\(promptTemplateSummary.isEmpty ? "未记录" : promptTemplateSummary)")
+        // 无效样本必须在报告头点名（24.9）：失败样本不再有分数，但"这一轮有几格没跑成"直接
+        // 决定平均分和放行门读起来算不算数，不能只藏在某个用例的表格行里。
+        let invalid = outcomes.filter { !$0.success }
+        if invalid.isEmpty {
+            lines.append("- 无效样本：无（全部成功）")
+        } else {
+            let detail = invalid
+                .map { "\($0.caseID)|\($0.pipeline)（\($0.error.isEmpty ? "未记录错误" : $0.error)）" }
+                .joined(separator: "；")
+            lines.append("- 无效样本：\(invalid.count)/\(outcomes.count) 格不计分、不进差值与放行门 —— \(detail)")
+        }
         lines.append("")
 
         var seenCaseIDs = Set<String>()
@@ -52,9 +63,12 @@ enum ReportGenerator {
                     diffText = "-"
                 }
                 let statusSuffix = outcome.success ? "" : "（失败：\(outcome.error)）"
+                // 质量列（总分、问题数）在失败样本上一律画横线：那些数字要么来自兜底稿，要么
+                // 是"没打分"被误读成"零问题"。成本列（字数/调用/耗时）是真实发生过的，照旧出数。
+                let quality: (String) -> String = { outcome.success ? $0 : "—" }
                 lines.append(
-                    "| \(pipeline)\(statusSuffix) | \(outcome.overallScore.map(String.init) ?? "-") "
-                        + "| \(outcome.highIssueCount) | \(outcome.mediumIssueCount) | \(outcome.lowIssueCount) "
+                    "| \(pipeline)\(statusSuffix) | \(quality(outcome.overallScore.map(String.init) ?? "-")) "
+                        + "| \(quality("\(outcome.highIssueCount)")) | \(quality("\(outcome.mediumIssueCount)")) | \(quality("\(outcome.lowIssueCount)")) "
                         + "| \(outcome.wordCount) | \(outcome.callCount) | \(outcome.searchCount) | \(outcome.fallbackCount) | \(outcome.elapsedMS) "
                         + "| \(previous.map(String.init) ?? "-") | \(diffText) | \(outcome.verificationSummary) |"
                 )

@@ -337,6 +337,30 @@ package struct EvalPipelineFacade {
         searchCount: Int = 0,
         sessionSummary: String = ""
     ) async throws -> EvalPipelineOutcome {
+        // 失败样本不打分（24.9）：生成失败时 content 是 NativeFallbacks 的本地兜底稿，给它打分
+        // 得到的是"兜底模板的分数"，却会一路进报告、进差值、进放行门。此前 68 行 success=0 的
+        // 结果都带着分数入库（其中 32 行耗时 ≥5s，离线熔断照不到）。这里直接不发评分调用：
+        // 既省一次模型调用，也从结构上保证无效样本没有分数可被误用。
+        guard success else {
+            return EvalPipelineOutcome(
+                title: title,
+                content: content,
+                overallScore: nil,
+                highIssueCount: 0,
+                mediumIssueCount: 0,
+                lowIssueCount: 0,
+                wordCount: content.count,
+                callCount: callCount,
+                fallbackCount: fallbackCount,
+                elapsedMS: elapsedMS,
+                success: false,
+                error: error.trimmingCharacters(in: .whitespacesAndNewlines),
+                verificationSummary: "未评分：生成失败，本样本不计入分数与放行门。",
+                searchCount: searchCount,
+                sessionSummary: sessionSummary
+            )
+        }
+
         let reviewContext = makeContext(stage: "评测：写作诊断", evalCase: evalCase, style: style, title: title, content: content)
         let scoringDescriptor = NativeWorkflowCatalog.writingReview(
             context: reviewContext,
@@ -355,8 +379,14 @@ package struct EvalPipelineFacade {
             scoringElapsed += retry.elapsedMS
             reviewRun = retry
         }
-        let issues = reviewRun.result.issues ?? []
-        let scoringHole = reviewRun.result.overall_score == nil ? "评分重试后仍未返回结构化分数" : ""
+        // 评分调用本身失败时，`reviewRun.result` 是 `NativeFallbacks.writingReview` 按段落数、
+        // 标题有无算出来的本地启发式分数（68 起步加减），既不是模型给的分，也不服从锚点。
+        // 它和它的 issues 一律不得出现在报告里（24.9）。
+        let issues = reviewRun.success ? (reviewRun.result.issues ?? []) : []
+        let overallScore = reviewRun.success ? reviewRun.result.overall_score : nil
+        let scoringHole = reviewRun.success && reviewRun.result.overall_score == nil
+            ? "评分重试后仍未返回结构化分数"
+            : ""
         let combinedError = [error, reviewRun.error, scoringHole]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -371,7 +401,7 @@ package struct EvalPipelineFacade {
         return EvalPipelineOutcome(
             title: title,
             content: content,
-            overallScore: reviewRun.result.overall_score,
+            overallScore: overallScore,
             highIssueCount: issues.filter { $0.severity == "高" }.count,
             mediumIssueCount: issues.filter { $0.severity == "中" }.count,
             lowIssueCount: issues.filter { $0.severity == "低" }.count,

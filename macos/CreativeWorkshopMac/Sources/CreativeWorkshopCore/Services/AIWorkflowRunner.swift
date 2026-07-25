@@ -2,9 +2,19 @@ import Foundation
 
 package struct AIWorkflowRunner {
     private let gateway: ModelGateway
+    /// 网络类失败的退避重试间隔（24.9）。数组长度即最大重试次数；测试传空数组或 0 秒。
+    private let networkRetryBackoff: [TimeInterval]
 
-    package init(gateway: ModelGateway = OpenAICompatibleModelGateway()) {
+    /// 5 秒 / 20 秒两次退避：超时本身已经占掉 120–240 秒，间隔再拉长对总耗时没有意义，
+    /// 而两次重试足以跨过 DeepSeek 那种几十秒级的抖动（真实评测里的失败全是这一类）。
+    package static let defaultNetworkRetryBackoff: [TimeInterval] = [5, 20]
+
+    package init(
+        gateway: ModelGateway = OpenAICompatibleModelGateway(),
+        networkRetryBackoff: [TimeInterval] = AIWorkflowRunner.defaultNetworkRetryBackoff
+    ) {
         self.gateway = gateway
+        self.networkRetryBackoff = networkRetryBackoff
     }
 
     package func run<T: Codable>(
@@ -21,6 +31,7 @@ package struct AIWorkflowRunner {
         let inputSummary = summarizeInput(endpoint: endpoint, messages: messages)
         var attemptMessages = messages
         var hasRetried = false
+        var networkRetryCount = 0
         var lastRawOutput = ""
 
         while true {
@@ -52,7 +63,7 @@ package struct AIWorkflowRunner {
                     elapsedMS: elapsedMS(since: start),
                     success: true,
                     error: "",
-                    inputSummary: hasRetried ? "\(inputSummary)（解析失败已重试 1 次后成功）" : inputSummary,
+                    inputSummary: inputSummary + retryNote(hasRetried: hasRetried, networkRetryCount: networkRetryCount, succeeded: true),
                     outputSummary: summarizeOutput(parsed)
                 )
             } catch {
@@ -66,6 +77,28 @@ package struct AIWorkflowRunner {
                         outputSummary: summarizeOutput(fallback)
                     )
                 }
+                // 网络类失败退避重试（24.9）：此前只有解析错误会重试，超时/连接中断/TLS 失败
+                // 一次就降级到本地兜底稿——评测里因此产出无效样本，App 里则是作者等了几分钟
+                // 拿到一篇"本地模拟稿"。等待本身不花钱，只花时间，比伪造一份稿子划算得多。
+                if isRetryableNetworkError(error), networkRetryCount < networkRetryBackoff.count {
+                    let delay = networkRetryBackoff[networkRetryCount]
+                    networkRetryCount += 1
+                    do {
+                        if delay > 0 {
+                            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        }
+                    } catch {
+                        return AIRun(
+                            result: fallback,
+                            elapsedMS: elapsedMS(since: start),
+                            success: false,
+                            error: NativeAIError.cancelled.localizedDescription,
+                            inputSummary: inputSummary,
+                            outputSummary: summarizeOutput(fallback)
+                        )
+                    }
+                    continue
+                }
                 if !hasRetried, isParsingError(error) {
                     hasRetried = true
                     attemptMessages = retryMessages(
@@ -75,9 +108,8 @@ package struct AIWorkflowRunner {
                     )
                     continue
                 }
-                let errorText = hasRetried
-                    ? "\(error.localizedDescription)（解析重试 1 次后仍失败）"
-                    : error.localizedDescription
+                let errorText = error.localizedDescription
+                    + retryNote(hasRetried: hasRetried, networkRetryCount: networkRetryCount, succeeded: false)
                 return AIRun(
                     result: fallback,
                     elapsedMS: elapsedMS(since: start),
@@ -88,6 +120,32 @@ package struct AIWorkflowRunner {
                 )
             }
         }
+    }
+
+    /// 可退避重试的网络类错误（24.9）：真实评测里出现过的失败全在这一类——超时、连接中断、
+    /// TLS 握手失败、DNS 解析不了。HTTP 错误（含 5xx）与 429 不在此列，保持 PRD 22.3.3-A
+    /// 定下的"只有解析错误重试"契约不变：那些是服务端明确的应答，重发同一请求未必更好。
+    private func isRetryableNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet,
+             .dnsLookupFailed, .cannotFindHost, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 重试痕迹写进 inputSummary / error，`ai_calls` 与评测报告里才看得出这一格重试过几次。
+    private func retryNote(hasRetried: Bool, networkRetryCount: Int, succeeded: Bool) -> String {
+        var notes: [String] = []
+        if networkRetryCount > 0 {
+            notes.append("网络重试 \(networkRetryCount) 次后\(succeeded ? "成功" : "仍失败")")
+        }
+        if hasRetried {
+            notes.append("解析\(succeeded ? "失败已重试 1 次后成功" : "重试 1 次后仍失败")")
+        }
+        return notes.isEmpty ? "" : "（\(notes.joined(separator: "；"))）"
     }
 
     /// 仅对输出解析类错误重试一次（PRD 22.3.3-A）：模型返回的内容无法解析为约定结构时，
