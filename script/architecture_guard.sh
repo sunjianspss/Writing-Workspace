@@ -75,6 +75,24 @@ if [[ -n "$coordinator_chat_message_hits" ]]; then
   fail=1
 fi
 
+# 死视图守卫（24.7）：定义了却没有任何调用点的 `private var xxx: some View` 是不会被渲染的
+# 死代码。24.1 的发布流程指示条就这样"实施完成"却从未上过屏——单元测试只能验 Store 层的
+# 计算属性，验不到有没有被挂进视图树，只有这条静态检查拦得住。
+dead_views=""
+while IFS= read -r file; do
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ "$(grep -c "\b${name}\b" "$file")" -le 1 ]]; then
+      dead_views+="${file}: ${name}"$'\n'
+    fi
+  done < <(grep -oE 'private var [a-zA-Z0-9_]+: some View' "$file" | awk '{print $3}' | tr -d ':')
+done < <(find "$SRC_DIR/Views" -name '*.swift' 2>/dev/null)
+if [[ -n "$dead_views" ]]; then
+  echo "ERROR: These private view properties are defined but never used; they render nowhere." >&2
+  echo "$dead_views" >&2
+  fail=1
+fi
+
 # R5 瘦身棘轮：每完成一个瘦身任务把警戒线拧低一格，只降不升（任务 23 后为 2050）。
 store_lines="$(wc -l < "$STORE_FILE" | tr -d ' ')"
 if [[ "$store_lines" -gt 2050 ]]; then

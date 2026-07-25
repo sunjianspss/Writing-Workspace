@@ -666,60 +666,6 @@ struct ComposerView: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var articleMetadata: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("文章信息")
-                    .font(.headline)
-                Spacer()
-                Text("\(store.content.count) 字")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                fieldCaption("标题")
-                TextField("文章标题", text: $store.title)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                fieldCaption("摘要")
-                TextEditor(text: $store.summary)
-                    .font(.callout)
-                    .frame(height: 52)
-                    .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-            }
-
-            HStack(spacing: 8) {
-                Picker("状态", selection: $store.articleStatus) {
-                    ForEach(articleStatuses, id: \.self) { status in
-                        Text(status).tag(status)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-
-                Button {
-                    Task { await store.requestArticleStatusChange(store.articleStatus) }
-                } label: {
-                    Label("更新状态", systemImage: "checkmark.circle")
-                }
-                .disabled(store.isLoading)
-
-                Button {
-                    Task { await store.requestArticleStatusChange("已归档") }
-                } label: {
-                    Label("归档", systemImage: "archivebox")
-                }
-                .disabled(store.isLoading || store.articleStatus == "已归档")
-            }
-            .controlSize(.small)
-
-            publishFlowIndicator
-        }
-    }
-
     /// 24.1 发布流程指示条：让"已发布"作为数据链必经站自解释。
     private var publishFlowIndicator: some View {
         HStack(spacing: 4) {
@@ -831,6 +777,8 @@ struct ComposerView: View {
                         publicationSaveControls
                     }
                 }
+
+                publishFlowIndicator
             }
         }
     }
