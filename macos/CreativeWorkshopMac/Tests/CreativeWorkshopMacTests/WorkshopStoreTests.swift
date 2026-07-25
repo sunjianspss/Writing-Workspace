@@ -978,6 +978,47 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(store.publishFlowStageIndex, 4)
     }
 
+    /// PRD 24.8：编辑量只记「非已发布 → 已发布」这一次跃迁。
+    /// 已发布状态下再点更新状态/保存会重复计数——作者首次发布香菱时一次发布记出 7 条零改动。
+    func testEditRecordIsWrittenOncePerPublishTransition() async throws {
+        let database = try makeDatabase()
+        let article = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "叹香菱",
+                content: "作者手改后的正文",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "文学原著"
+            )
+        )
+        _ = try database.saveDraftVersion(
+            articleID: article.id,
+            titleSnapshot: "叹香菱",
+            action: "按诊断改全文",
+            note: "",
+            before: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "旧正文"),
+            after: DraftSnapshot(title: "叹香菱", summary: "摘要", content: "模型改写后的正文")
+        )
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.selectedArticleID = article.id
+
+        await store.updateSelectedArticleStatus("已发布")
+        XCTAssertEqual(try database.listEditRecords(limit: 10).count, 1, "首次发布应记一条")
+
+        // 已经是"已发布"了，再点几次更新状态不应继续追加。
+        await store.updateSelectedArticleStatus("已发布")
+        await store.updateSelectedArticleStatus("已发布")
+        XCTAssertEqual(try database.listEditRecords(limit: 10).count, 1, "重复发布不得重复计数")
+
+        // 归档再发布是一次新的跃迁，应当再记一条。
+        await store.updateSelectedArticleStatus("已归档")
+        await store.updateSelectedArticleStatus("已发布")
+        XCTAssertEqual(try database.listEditRecords(limit: 10).count, 2)
+    }
+
     /// PRD 24.6：few-shot 样本必须是**完成稿**且**体裁同族**。
     /// 24.3 只给"精确匹配落空"的兜底分支加了"草稿不参与"，精确命中的主路径照旧会把
     /// 改到一半的草稿当风格范本；兜底又会跨体裁取到技术文，教出错的腔调。

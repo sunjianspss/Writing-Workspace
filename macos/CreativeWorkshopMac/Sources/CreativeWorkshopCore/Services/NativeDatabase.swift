@@ -641,14 +641,22 @@ package final class NativeDatabase {
         }
     }
 
-    package func latestConfirmedDraftVersion(articleID: Int) throws -> DraftVersion? {
+    /// 编辑量（北极星）的基准版本：最近一次**模型产出并被作者确认**的稿子。
+    ///
+    /// 必须排除 `action = '保存文章'` ——覆盖保存本身也会记一条 confirmed 版本，内容就是
+    /// 作者当下的正文。若把它当基准，比较的是"刚保存的那版 vs 刚保存的那版"，编辑比例
+    /// 结构上恒为 0（24.8：作者首次发布记下的 7 条全是零改动，就是这么来的）。
+    /// 库里其余 action（大纲成稿/按诊断改全文/定点改写/有界代理循环…）都是模型产出。
+    package func latestModelDraftVersion(articleID: Int) throws -> DraftVersion? {
         try rows(
             """
             \(draftVersionSelectSQL)
-            WHERE article_id = ? AND review_status = 'confirmed'
-            ORDER BY created_at DESC LIMIT 1
+            WHERE article_id = ? AND review_status = 'confirmed' AND action != ?
+            -- created_at 只到秒，模型动作之后紧跟一次保存完全可能同秒；再按 id 排一次，
+            -- 免得"最近一版"在并列时随实现摇摆。
+            ORDER BY created_at DESC, id DESC LIMIT 1
             """,
-            [articleID],
+            [articleID, DraftVersionAction.manualSave],
             mapper: draftVersion
         ).first
     }

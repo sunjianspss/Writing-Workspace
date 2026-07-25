@@ -1447,7 +1447,14 @@ final class WorkshopStore: ObservableObject {
                 }
             }
             var auditNote = ""
-            if finalStatus == "已发布" { auditNote = try await self.runPrePublishAudit(articleID: article.id); self.applyPublishingMetrics(PublishingMetricsRecorder(database: self.database).recordPublishedArticle(article)) }
+            // 编辑量只在「非已发布 → 已发布」这一次跃迁上记；已发布状态下再保存不再追加，
+            // 否则同一篇文章会被重复计数（24.8：香菱一次发布记出 7 条零改动）。
+            if finalStatus == "已发布" {
+                auditNote = try await self.runPrePublishAudit(articleID: article.id)
+                if previousSaved?.status != "已发布" {
+                    self.applyPublishingMetrics(PublishingMetricsRecorder(database: self.database).recordPublishedArticle(article))
+                }
+            }
             self.articleStatus = article.status ?? finalStatus
             self.articles = try self.database.listArticles()
             self.draftVersions = try self.database.listDraftVersions(articleID: article.id, limit: 8)
@@ -1466,12 +1473,14 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run(status == "已发布" ? "发表前终审并发布" : "更新文章状态", cancellable: status == "已发布") {
+            let previousStatus = (try? self.database.getArticle(selectedArticleID))?.status
             var auditNote = ""
             if status == "已发布" {
                 auditNote = try await self.runPrePublishAudit(articleID: selectedArticleID)
             }
             let article = try self.database.updateArticleStatus(id: selectedArticleID, status: status)
-            if status == "已发布" {
+            // 只记「非已发布 → 已发布」这一次跃迁，反复点「更新状态」不再追加（24.8）。
+            if status == "已发布", previousStatus != "已发布" {
                 self.applyPublishingMetrics(PublishingMetricsRecorder(database: self.database).recordPublishedArticle(article))
             }
             self.articleStatus = article.status ?? status

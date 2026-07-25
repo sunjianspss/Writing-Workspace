@@ -14,7 +14,7 @@ package struct PublishingMetricsRecorder {
 
     package func recordPublishedArticle(_ article: Article) -> PublishingMetricsSnapshot? {
         do {
-            if let version = try database.latestConfirmedDraftVersion(articleID: article.id) {
+            if let version = try database.latestModelDraftVersion(articleID: article.id) {
                 _ = try database.saveEditRecord(article: article, draftVersion: version)
             }
             return try snapshot()
