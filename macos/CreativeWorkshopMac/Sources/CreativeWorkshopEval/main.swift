@@ -111,7 +111,8 @@ func run() async -> Int32 {
             gitDescribe: gitDescribe,
             outcomes: outcomes,
             previousScores: previousScores,
-            styleSampleNames: styleSamples.map(\.name)
+            styleSampleNames: styleSamples.map(\.name),
+            promptTemplateSummary: facade.promptTemplateSummary
         )
         try FileManager.default.createDirectory(at: reportsDir, withIntermediateDirectories: true)
         let reportFileName = runTimestamp.replacingOccurrences(of: ":", with: "-") + ".md"

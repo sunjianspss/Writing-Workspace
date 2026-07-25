@@ -9,7 +9,8 @@ enum ReportGenerator {
         gitDescribe: String,
         outcomes: [PipelineOutcome],
         previousScores: [String: Int],
-        styleSampleNames: [String] = []
+        styleSampleNames: [String] = [],
+        promptTemplateSummary: String = ""
     ) -> String {
         var lines: [String] = []
         lines.append("# 写作质量评测报告")
@@ -21,6 +22,9 @@ enum ReportGenerator {
         // 用例的来源"无法可靠自动判定（正文可能带 frontmatter，idea 侧孪生更无从比对），
         // 只能靠可见性让人复核（24.4）。
         lines.append("- 风格样本：\(styleSampleNames.isEmpty ? "无（零样本配置）" : styleSampleNames.joined(separator: "、"))")
+        // 生成动作用的是库内模板（与 App 同源，24.5），模板换了分数同样不可比；作者手改过的
+        // 模板会标「作者自定义」，提醒复核这一轮量的到底是不是内置 prompt。
+        lines.append("- Prompt 模板：\(promptTemplateSummary.isEmpty ? "未记录" : promptTemplateSummary)")
         lines.append("")
 
         var seenCaseIDs = Set<String>()
