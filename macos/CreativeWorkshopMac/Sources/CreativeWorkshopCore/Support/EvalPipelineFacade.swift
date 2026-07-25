@@ -42,6 +42,10 @@ package struct EvalPipelineOutcome {
     /// recordAgentRun，会话轨迹在此压缩进 outcome，随 rawJSON 入库并在报告按用例展示；
     /// 其余管线为空字符串。
     package var sessionSummary: String = ""
+    /// 本次诊断报出的问题维度，形如 `人称视角(中)`（24.9-P1）。24.2 的裁决是"趋势改用问题
+    /// 清单而非分数来读"——但工具此前只跨轮比分数，清单只有三个计数、没有维度，读不出
+    /// "哪条问题新出现、哪条消失了"。无效样本为空数组。
+    package var issueDimensions: [String] = []
 }
 
 package enum EvalFacadeError: LocalizedError {
@@ -413,7 +417,14 @@ package struct EvalPipelineFacade {
             error: combinedError,
             verificationSummary: verificationReport.summaryLine,
             searchCount: searchCount,
-            sessionSummary: sessionSummary
+            sessionSummary: sessionSummary,
+            // 维度 + 严重度，供报告跨轮比清单（24.9-P1）。严重度缺失时标「未标」而不是丢掉，
+            // 否则"这条问题降级了"会被读成"这条问题消失了"。
+            issueDimensions: issues.map { issue in
+                let dimension = issue.dimension.trimmingCharacters(in: .whitespacesAndNewlines)
+                let severity = issue.severity.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "\(dimension.isEmpty ? "未标维度" : dimension)(\(severity.isEmpty ? "未标" : severity))"
+            }
         )
     }
 

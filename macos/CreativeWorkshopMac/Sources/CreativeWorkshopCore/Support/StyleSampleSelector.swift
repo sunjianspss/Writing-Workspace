@@ -25,22 +25,55 @@ package enum StyleSampleSelector {
         return hasCommonRun(left, right, length: minimumSharedRunLength)
     }
 
+    /// 命中的档位（24.9-P1）：作者怀疑"写出来不像我"时，第一个要看的就是这次注入的是哪一档
+    /// 样本——精确同体裁和跨体裁凑数是两回事，界面上必须能分辨。
+    package enum Tier: String, Codable {
+        case exact
+        case family
+        case cross
+        case none
+
+        package var label: String {
+            switch self {
+            case .exact: return "体裁精确匹配"
+            case .family: return "体裁同族"
+            case .cross: return "跨体裁凑数"
+            case .none: return "无样本"
+            }
+        }
+    }
+
+    package struct Selection {
+        package var tier: Tier
+        package var articles: [Article]
+
+        package init(tier: Tier, articles: [Article]) {
+            self.tier = tier
+            self.articles = articles
+        }
+    }
+
     /// 按优先级挑样本，**只取最高的那一档**，不混档：
     /// 1. 体裁精确相同 2. 体裁同族 3. 其余（跨体裁，宁可跨也好过模型一篇都没见过作者的文字）
     ///
     /// 调用方负责先把候选限定为完成稿——改到一半的草稿不能当风格范本。
-    package static func select(from articles: [Article], genreKey: String, limit: Int = 3) -> [Article] {
+    package static func selection(from articles: [Article], genreKey: String, limit: Int = 3) -> Selection {
         let key = normalized(genreKey)
         let exact = articles.filter { normalized($0.genre) == key && !key.isEmpty }
         if !exact.isEmpty {
-            return Array(exact.prefix(limit))
+            return Selection(tier: .exact, articles: Array(exact.prefix(limit)))
         }
         let family = articles.filter { isSameGenreFamily($0.genre, genreKey) }
         if !family.isEmpty {
-            return Array(family.prefix(limit))
+            return Selection(tier: .family, articles: Array(family.prefix(limit)))
         }
         // 跨体裁这一档保守取 2 篇：腔调本就不一定对得上，注入多了反而带偏。
-        return Array(articles.prefix(min(limit, 2)))
+        let cross = Array(articles.prefix(min(limit, 2)))
+        return Selection(tier: cross.isEmpty ? .none : .cross, articles: cross)
+    }
+
+    package static func select(from articles: [Article], genreKey: String, limit: Int = 3) -> [Article] {
+        selection(from: articles, genreKey: genreKey, limit: limit).articles
     }
 
     private static func normalized(_ text: String?) -> String {

@@ -89,7 +89,7 @@ func run() async -> Int32 {
             runID = UUID().uuidString
             runTimestamp = ISO8601DateFormatter().string(from: Date())
         }
-        let previousScores = try store.previousRunScores(before: runTimestamp)
+        let previousSamples = try store.previousRunSamples(before: runTimestamp)
         let encoder = JSONEncoder()
 
         var offlineWaits = 0
@@ -143,7 +143,7 @@ func run() async -> Int32 {
             runTimestamp: runTimestamp,
             gitDescribe: reportGitDescribe,
             outcomes: outcomes,
-            previousScores: previousScores,
+            previousSamples: previousSamples,
             styleSampleNames: styleSamples.map(\.name),
             promptTemplateSummary: facade.promptTemplateSummary
         )

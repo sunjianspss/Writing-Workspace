@@ -21,6 +21,9 @@ struct PipelineOutcome: Codable {
     var searchCount: Int
     /// agentic 会话摘要（评测仪器修缮）：动作序列 + 停止原因，其余管线为空字符串。
     var sessionSummary: String = ""
+    /// 本轮诊断报出的问题维度，形如 `人称视角(中)`（24.9-P1）：24.2 裁决"趋势看问题清单不看
+    /// 分数"，跨轮比清单需要维度本身，只有三个计数比不出"哪条新出现、哪条消失"。
+    var issueDimensions: [String] = []
 }
 
 enum EvalError: LocalizedError {
@@ -73,7 +76,8 @@ struct PipelineRunner {
             error: outcome.error,
             verificationSummary: outcome.verificationSummary,
             searchCount: outcome.searchCount,
-            sessionSummary: outcome.sessionSummary
+            sessionSummary: outcome.sessionSummary,
+            issueDimensions: outcome.issueDimensions
         )
     }
 }

@@ -8,7 +8,7 @@ enum ReportGenerator {
         runTimestamp: String,
         gitDescribe: String,
         outcomes: [PipelineOutcome],
-        previousScores: [String: Int],
+        previousSamples: [String: PreviousSample],
         styleSampleNames: [String] = [],
         promptTemplateSummary: String = ""
     ) -> String {
@@ -54,7 +54,8 @@ enum ReportGenerator {
                 guard let outcome = outcomes.first(where: { $0.caseID == caseID && $0.pipeline == pipeline }) else {
                     continue
                 }
-                let previous = previousScores["\(caseID)|\(pipeline)"]
+                let previousSample = previousSamples["\(caseID)|\(pipeline)"]
+                let previous = previousSample?.overallScore
                 let diffText: String
                 if let previous, let current = outcome.overallScore {
                     let diff = current - previous
@@ -72,6 +73,22 @@ enum ReportGenerator {
                         + "| \(outcome.wordCount) | \(outcome.callCount) | \(outcome.searchCount) | \(outcome.fallbackCount) | \(outcome.elapsedMS) "
                         + "| \(previous.map(String.init) ?? "-") | \(diffText) | \(outcome.verificationSummary) |"
                 )
+            }
+            // 问题清单跨轮对比（24.9-P1）：24.2 裁决"趋势改用问题清单而非分数来读"，分数在
+            // 79/80 档界会因为漏检一条低危跳 10 分，而问题清单在同一批数据里是稳定的。
+            // 只对有效样本出这一行——失败样本没有清单可比。
+            let trendLines = PipelineRunner.pipelineNames.compactMap { pipeline -> String? in
+                guard let outcome = outcomes.first(where: { $0.caseID == caseID && $0.pipeline == pipeline }),
+                      outcome.success else { return nil }
+                let trend = IssueTrend.describe(
+                    current: outcome.issueDimensions,
+                    previous: previousSamples["\(caseID)|\(pipeline)"]
+                )
+                return "- \(pipeline) \(trend)"
+            }
+            if !trendLines.isEmpty {
+                lines.append("")
+                lines.append(contentsOf: trendLines)
             }
             // agentic 会话轨迹（评测仪器修缮）：无头评测不落 agent_runs，摘要直接进报告，
             // 便于诊断"为什么跑满预算/为什么提前停"。

@@ -18,7 +18,8 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         fallbackCount: Int = 0,
         verificationSummary: String = "验证通过：3 项检查全部通过。",
         searchCount: Int = 0,
-        success: Bool = true
+        success: Bool = true,
+        issueDimensions: [String] = []
     ) -> PipelineOutcome {
         PipelineOutcome(
             pipeline: pipeline,
@@ -36,12 +37,29 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             success: success,
             error: success ? "" : "The request timed out.",
             verificationSummary: verificationSummary,
-            searchCount: searchCount
+            searchCount: searchCount,
+            issueDimensions: issueDimensions
         )
     }
 
     private func rawJSON(for outcome: PipelineOutcome) throws -> String {
         String(data: try JSONEncoder().encode(outcome), encoding: .utf8) ?? "{}"
+    }
+
+    private func makePrevious(
+        score: Int?,
+        high: Int = 1,
+        medium: Int = 2,
+        low: Int = 0,
+        dimensions: [String] = []
+    ) -> PreviousSample {
+        PreviousSample(
+            overallScore: score,
+            highIssueCount: high,
+            mediumIssueCount: medium,
+            lowIssueCount: low,
+            issueDimensions: dimensions
+        )
     }
 
     func testInsertAndReadBackRawJSON() throws {
@@ -51,11 +69,11 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         try store.insert(runID: "run-1", runTimestamp: "2026-07-05T10:00:00Z", gitDescribe: "abc123", outcome: outcome, rawJSON: "{}")
 
         // previousRunScores 只应该看到严格早于给定时间戳的 run。
-        let scoresBeforeSameRun = try store.previousRunScores(before: "2026-07-05T10:00:00Z")
+        let scoresBeforeSameRun = try store.previousRunSamples(before: "2026-07-05T10:00:00Z")
         XCTAssertTrue(scoresBeforeSameRun.isEmpty)
 
-        let scoresAfter = try store.previousRunScores(before: "2026-07-05T11:00:00Z")
-        XCTAssertEqual(scoresAfter["case-01|direct"], 70)
+        let scoresAfter = try store.previousRunSamples(before: "2026-07-05T11:00:00Z")
+        XCTAssertEqual(scoresAfter["case-01|direct"]?.overallScore, 70)
     }
 
     /// 兼容旧数据（PRD 23.4 验收标准 4）：老版本写入的 eval_results.sqlite3 没有 fallback_count
@@ -91,8 +109,8 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         let outcome = makeOutcome(pipeline: "direct", caseID: "case-legacy", overallScore: 60, fallbackCount: 2)
         try store.insert(runID: "run-legacy", runTimestamp: "2026-07-05T09:00:00Z", gitDescribe: "abc123", outcome: outcome, rawJSON: "{}")
 
-        let scores = try store.previousRunScores(before: "2026-07-05T10:00:00Z")
-        XCTAssertEqual(scores["case-legacy|direct"], 60)
+        let scores = try store.previousRunSamples(before: "2026-07-05T10:00:00Z")
+        XCTAssertEqual(scores["case-legacy|direct"]?.overallScore, 60)
     }
 
     /// 兼容旧数据（PRD 23.7）：老版本写入的 eval_results.sqlite3 既没有 fallback_count 也没有
@@ -129,8 +147,8 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         let outcome = makeOutcome(pipeline: "direct", caseID: "case-legacy-2", overallScore: 60)
         try store.insert(runID: "run-legacy-2", runTimestamp: "2026-07-05T09:00:00Z", gitDescribe: "abc123", outcome: outcome, rawJSON: "{}")
 
-        let scores = try store.previousRunScores(before: "2026-07-05T10:00:00Z")
-        XCTAssertEqual(scores["case-legacy-2|direct"], 60)
+        let scores = try store.previousRunSamples(before: "2026-07-05T10:00:00Z")
+        XCTAssertEqual(scores["case-legacy-2|direct"]?.overallScore, 60)
     }
 
     /// 兼容旧数据（PRD 23.8.1）：老版本写入的 eval_results.sqlite3 没有 search_count 列。
@@ -167,8 +185,8 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         let outcome = makeOutcome(pipeline: "agentic", caseID: "case-legacy-3", overallScore: 60, searchCount: 2)
         try store.insert(runID: "run-legacy-3", runTimestamp: "2026-07-05T09:00:00Z", gitDescribe: "abc123", outcome: outcome, rawJSON: "{}")
 
-        let scores = try store.previousRunScores(before: "2026-07-05T10:00:00Z")
-        XCTAssertEqual(scores["case-legacy-3|agentic"], 60)
+        let scores = try store.previousRunSamples(before: "2026-07-05T10:00:00Z")
+        XCTAssertEqual(scores["case-legacy-3|agentic"]?.overallScore, 60)
     }
 
     func testReportIncludesEachCaseAndPipelineWithScoreDiff() throws {
@@ -177,14 +195,14 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             makeOutcome(pipeline: "agent", caseID: "case-01", overallScore: 80),
             makeOutcome(pipeline: "deep", caseID: "case-01", overallScore: 85)
         ]
-        let previousScores = ["case-01|direct": 70, "case-01|agent": 82]
+        let previousSamples = ["case-01|direct": makePrevious(score: 70), "case-01|agent": makePrevious(score: 82)]
 
         let report = ReportGenerator.generate(
             runID: "run-2",
             runTimestamp: "2026-07-05T12:00:00Z",
             gitDescribe: "abc123",
             outcomes: outcomes,
-            previousScores: previousScores
+            previousSamples: previousSamples
         )
 
         XCTAssertTrue(report.contains("case-01"))
@@ -207,7 +225,7 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             runTimestamp: "2026-07-25T12:00:00Z",
             gitDescribe: "abc123",
             outcomes: [],
-            previousScores: [:],
+            previousSamples: [:],
             styleSampleNames: ["01-时间扑面而来", "02-清白的人"]
         )
 
@@ -223,10 +241,61 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
         try store.insert(runID: "run-1", runTimestamp: "2026-07-24T10:00:00Z", gitDescribe: "abc", outcome: good, rawJSON: try rawJSON(for: good))
         try store.insert(runID: "run-1", runTimestamp: "2026-07-24T10:00:00Z", gitDescribe: "abc", outcome: failed, rawJSON: try rawJSON(for: failed))
 
-        let scores = try store.previousRunScores(before: "2026-07-25T10:00:00Z")
+        let scores = try store.previousRunSamples(before: "2026-07-25T10:00:00Z")
 
-        XCTAssertEqual(scores["case-01|direct"], 85)
+        XCTAssertEqual(scores["case-01|direct"]?.overallScore, 85)
         XCTAssertNil(scores["case-01|deep"], "失败样本不得成为下一轮的基准分")
+    }
+
+    /// 24.9-P1：问题维度要能落库、读回，跨轮才比得出"哪条新出现、哪条消失"。
+    /// 三档计数一起读回——分数在档界会跳 10 分，清单才是 24.2 裁决要看的东西。
+    func testPreviousRunSamplesCarriesIssueDimensionsAndCounts() throws {
+        let store = try EvalResultsStore(databaseURL: try makeTempDatabaseURL())
+        let outcome = makeOutcome(
+            pipeline: "deep",
+            caseID: "case-27",
+            overallScore: 83,
+            issueDimensions: ["人称视角(中)", "意象与细节(中)"]
+        )
+        try store.insert(runID: "run-1", runTimestamp: "2026-07-24T10:00:00Z", gitDescribe: "abc", outcome: outcome, rawJSON: try rawJSON(for: outcome))
+
+        let sample = try XCTUnwrap(try store.previousRunSamples(before: "2026-07-25T10:00:00Z")["case-27|deep"])
+
+        XCTAssertEqual(sample.overallScore, 83)
+        XCTAssertEqual(sample.issueDimensions, ["人称视角(中)", "意象与细节(中)"])
+        XCTAssertEqual(sample.mediumIssueCount, 2)
+    }
+
+    /// 24.9-P1：报告要为每条有效样本出一行问题清单，并在有上一轮数据时写出清单进出。
+    func testReportRendersIssueListTrendPerPipeline() {
+        let outcomes = [
+            makeOutcome(
+                pipeline: "deep",
+                caseID: "case-27",
+                overallScore: 72,
+                issueDimensions: ["人称视角(中)", "意象与细节(中)", "留白与节奏(中)"]
+            )
+        ]
+
+        let report = ReportGenerator.generate(
+            runID: "run-trend",
+            runTimestamp: "2026-07-25T12:00:00Z",
+            gitDescribe: "abc123",
+            outcomes: outcomes,
+            previousSamples: [
+                "case-27|deep": makePrevious(
+                    score: 83,
+                    high: 0,
+                    medium: 2,
+                    low: 0,
+                    dimensions: ["人称视角(中)", "意象与细节(中)"]
+                )
+            ]
+        )
+
+        XCTAssertTrue(report.contains("- deep 问题清单：人称视角(中)、意象与细节(中)、留白与节奏(中)"), report)
+        XCTAssertTrue(report.contains("中 2→3"), "条数变化要写出来：\(report)")
+        XCTAssertTrue(report.contains("新增 留白与节奏(中)"), "清单进出才是 24.2 要看的趋势：\(report)")
     }
 
     /// 24.9 断点续跑：跳过集合只认成功样本，失败的格子续跑时要重跑；同一格重跑过则后写入的
@@ -268,7 +337,7 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             runTimestamp: "2026-07-25T12:00:00Z",
             gitDescribe: "abc123",
             outcomes: outcomes,
-            previousScores: ["case-01|deep": 86]
+            previousSamples: ["case-01|deep": makePrevious(score: 86)]
         )
 
         XCTAssertTrue(report.contains("无效样本：1/2 格不计分"), "报告头必须点名无效样本：\(report)")
@@ -283,7 +352,7 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             runTimestamp: "2026-07-25T12:00:00Z",
             gitDescribe: "abc123",
             outcomes: [makeOutcome(pipeline: "direct", caseID: "case-01", overallScore: 85)],
-            previousScores: [:]
+            previousSamples: [:]
         )
 
         XCTAssertTrue(report.contains("无效样本：无（全部成功）"))
@@ -296,7 +365,7 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
             runTimestamp: "2026-07-25T12:00:00Z",
             gitDescribe: "abc123",
             outcomes: [],
-            previousScores: [:],
+            previousSamples: [:],
             promptTemplateSummary: "大纲成稿(默认)、生成大纲(作者自定义)"
         )
 

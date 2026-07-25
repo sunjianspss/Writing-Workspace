@@ -203,7 +203,7 @@ final class EvalInstrumentationTests: XCTestCase {
             runTimestamp: "2026-07-07T00:00:00Z",
             gitDescribe: "test",
             outcomes: [deep, agentic],
-            previousScores: [:]
+            previousSamples: [:]
         )
 
         XCTAssertTrue(report.contains("- agentic 会话：步骤(3)"), "报告应展示 agentic 会话轨迹")

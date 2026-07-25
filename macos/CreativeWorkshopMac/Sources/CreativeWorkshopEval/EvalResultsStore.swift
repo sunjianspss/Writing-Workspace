@@ -44,6 +44,13 @@ final class EvalResultsStore {
         try addFallbackCountColumnIfMissing()
         try addVerificationSummaryColumnIfMissing()
         try addSearchCountColumnIfMissing()
+        try addIssueDimensionsColumnIfMissing()
+    }
+
+    /// 兼容旧数据（24.9-P1）：老版本没有 issue_dimensions 列。历史行读回来是空清单——
+    /// 维度级趋势从本次之后的运行才有，分数与三档计数仍可比。
+    private func addIssueDimensionsColumnIfMissing() throws {
+        try addColumnIfMissing(name: "issue_dimensions", definition: "TEXT NOT NULL DEFAULT ''")
     }
 
     /// 兼容旧数据（PRD 23.4 验收标准 4）：老版本写入的 eval_results.sqlite3 没有 fallback_count 列，
@@ -89,8 +96,8 @@ final class EvalResultsStore {
             run_id, run_timestamp, git_describe, case_id, pipeline,
             overall_score, high_issue_count, medium_issue_count, low_issue_count,
             word_count, call_count, fallback_count, elapsed_ms, success, error, raw_json,
-            verification_summary, search_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            verification_summary, search_count, issue_dimensions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
@@ -120,18 +127,22 @@ final class EvalResultsStore {
         sqlite3_bind_text(statement, 16, rawJSON, -1, sqliteTransient)
         sqlite3_bind_text(statement, 17, outcome.verificationSummary, -1, sqliteTransient)
         sqlite3_bind_int(statement, 18, Int32(outcome.searchCount))
+        sqlite3_bind_text(statement, 19, outcome.issueDimensions.joined(separator: "、"), -1, sqliteTransient)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw EvalStoreError.step(message: lastErrorMessage)
         }
     }
 
-    /// 严格早于给定时间戳的最近一次 run 里，各 case_id+pipeline 的 overall_score，供报告算差值。
+    /// 严格早于给定时间戳的最近一次 run 里，各 case_id+pipeline 的可比结果，供报告算差值与
+    /// 问题清单变化（24.9-P1：分数 + 三档计数 + 问题维度）。
     /// 只取成功样本（24.9）：失败样本的分数是兜底稿或本地启发式算出来的，当过"上次总分"就会
     /// 凭空造出一列差值——7-24 那轮报告的 -18/-27/-28 全部来自此处。
-    func previousRunScores(before runTimestamp: String) throws -> [String: Int] {
+    func previousRunSamples(before runTimestamp: String) throws -> [String: PreviousSample] {
         let sql = """
-        SELECT case_id, pipeline, overall_score FROM eval_results
+        SELECT case_id, pipeline, overall_score, high_issue_count, medium_issue_count,
+               low_issue_count, issue_dimensions
+        FROM eval_results
         WHERE success = 1 AND run_id = (
             SELECT run_id FROM eval_results
             WHERE run_timestamp < ?
@@ -146,13 +157,22 @@ final class EvalResultsStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_text(statement, 1, runTimestamp, -1, sqliteTransient)
 
-        var result: [String: Int] = [:]
+        var result: [String: PreviousSample] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let caseIDText = sqlite3_column_text(statement, 0),
                   let pipelineText = sqlite3_column_text(statement, 1) else { continue }
-            guard sqlite3_column_type(statement, 2) != SQLITE_NULL else { continue }
             let key = "\(String(cString: caseIDText))|\(String(cString: pipelineText))"
-            result[key] = Int(sqlite3_column_int(statement, 2))
+            let score = sqlite3_column_type(statement, 2) == SQLITE_NULL
+                ? nil
+                : Int(sqlite3_column_int(statement, 2))
+            let dimensionsText = sqlite3_column_text(statement, 6).map { String(cString: $0) } ?? ""
+            result[key] = PreviousSample(
+                overallScore: score,
+                highIssueCount: Int(sqlite3_column_int(statement, 3)),
+                mediumIssueCount: Int(sqlite3_column_int(statement, 4)),
+                lowIssueCount: Int(sqlite3_column_int(statement, 5)),
+                issueDimensions: dimensionsText.isEmpty ? [] : dimensionsText.components(separatedBy: "、")
+            )
         }
         return result
     }

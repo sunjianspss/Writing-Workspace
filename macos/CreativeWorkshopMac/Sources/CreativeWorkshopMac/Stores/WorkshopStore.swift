@@ -41,6 +41,9 @@ final class WorkshopStore: ObservableObject {
     @Published var latestPublishAssets: PublishAssets?
     @Published var publishAssetsHistory: [PublishAssets] = []
     @Published var latestPrePublishAudit: PrePublishAudit?
+    /// 最近一次 `resolveStyle()` 实际注入的 few-shot 样本出处（24.9-P1）。不是 @Published：
+    /// 界面只在交付待复核时读它一次，随 `PendingDraftReview` 一起进卡片。
+    var lastStyleSampleProvenance: StyleSampleProvenance?
     @Published var editRecordStats: EditRecordStats?
     @Published var editRecordMonthlySummary: String = ""
     @Published var latestAdvisorRun: WritingAdvisorRun?
@@ -1735,6 +1738,7 @@ final class WorkshopStore: ObservableObject {
     func resolveStyle() throws -> StyleProfile {
         var style = try database.styleProfile(forDirection: normalizedDirection)
         let genreKey = style.genre.nilIfEmpty ?? normalizedDirection
+        var usedDraftFallback = false
         // 一次取够近期**完成稿**作候选，体裁优先级交给 StyleSampleSelector 判（24.6）：
         // 精确相等的匹配太脆（方向换个说法样本就归零），跨体裁乱取又会拿技术文教文学腔。
         // 草稿不进候选——改到一半的稿子不能当风格范本。
@@ -1752,9 +1756,17 @@ final class WorkshopStore: ObservableObject {
                 excludingArticleID: selectedArticleID,
                 limit: 2
             )
+            usedDraftFallback = !candidates.isEmpty
         }
-        let sampleArticles = StyleSampleSelector.select(from: candidates, genreKey: genreKey)
+        let selection = StyleSampleSelector.selection(from: candidates, genreKey: genreKey)
+        let sampleArticles = selection.articles
         let genreExcerpts = sampleArticles.compactMap { $0.content.nilIfEmpty }
+        // 注入出处随每次 resolveStyle 更新，交付待复核时一并带给界面（24.9-P1）。
+        lastStyleSampleProvenance = StyleSampleProvenance(
+            tierLabel: selection.tier.label,
+            titles: sampleArticles.compactMap { $0.title.nilIfEmpty },
+            usedDraftFallback: usedDraftFallback
+        )
         guard !genreExcerpts.isEmpty else {
             return style
         }
