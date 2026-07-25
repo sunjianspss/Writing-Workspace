@@ -1726,23 +1726,25 @@ final class WorkshopStore: ObservableObject {
     func resolveStyle() throws -> StyleProfile {
         var style = try database.styleProfile(forDirection: normalizedDirection)
         let genreKey = style.genre.nilIfEmpty ?? normalizedDirection
-        var sampleArticles = try database.recentArticlesForSamples(
-            genre: genreKey,
+        // 一次取够近期**完成稿**作候选，体裁优先级交给 StyleSampleSelector 判（24.6）：
+        // 精确相等的匹配太脆（方向换个说法样本就归零），跨体裁乱取又会拿技术文教文学腔。
+        // 草稿不进候选——改到一半的稿子不能当风格范本。
+        var candidates = try database.recentArticlesForSamples(
+            genre: nil,
             excludingArticleID: selectedArticleID,
-            limit: 3
+            limit: 10,
+            finishedOnly: true
         )
-        // 体裁匹配是字符串精确相等，而 articles.genre 存的是保存时的写作方向原文：
-        // 方向换个说法（"经典文学解读" vs "文学原著"）样本就归零，且界面无提示，
-        // 模型只能靠几个抽象形容词写作者的文章。落空时兜底取近期完成稿——
-        // 宁可样本跨体裁，也好过一篇都没见过作者的文字（24.3）。
-        if sampleArticles.isEmpty {
-            sampleArticles = try database.recentArticlesForSamples(
+        if candidates.isEmpty {
+            // 一篇完成稿都没有（新库/全是草稿）时才退到草稿：范本不理想，但好过模型一篇
+            // 都没见过作者的文字。
+            candidates = try database.recentArticlesForSamples(
                 genre: nil,
                 excludingArticleID: selectedArticleID,
-                limit: 2,
-                finishedOnly: true
+                limit: 2
             )
         }
+        let sampleArticles = StyleSampleSelector.select(from: candidates, genreKey: genreKey)
         let genreExcerpts = sampleArticles.compactMap { $0.content.nilIfEmpty }
         guard !genreExcerpts.isEmpty else {
             return style
