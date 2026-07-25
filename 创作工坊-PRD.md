@@ -2709,3 +2709,17 @@ schema 变更走 `PRAGMA user_version` 迁移。
 **残留边界**：
 - 同族判定是字面启发式，不懂语义。"广告创意"与"创意写作"会被判为同族（共享"创意"），而"随笔"与"散文"不会。作者若把方向写得五花八门，仍可能连错——但比精确相等和跨体裁乱取都稳。
 - 注入了哪几篇样本 App 界面上仍然看不见（评测报告有「风格样本」行，App 没有对应展示）。作者若怀疑"写出来不像我"，目前只能查库。
+
+### 24.7 发布流程指示条从未上屏（已实施，2026-07-25）
+
+**背景**：作者问"哪儿有已发布、如何才能到达已发布"——这本该是 24.1 的流程指示条回答的问题。
+
+**证据**：`ComposerView.publishFlowIndicator`（"构思 → 初稿 → 待复核 → 已发布 → 已归档"，24.1 实施记录第 2 条）只被 `articleMetadata` 引用，而 `articleMetadata` **全文件没有任何调用点**——是死代码。文章编辑页签实际用的是 `publicationHeaderPanel` 那套布局，只有状态控件，没有指示条。24.1 的两半里，护栏（`requestArticleStatusChange`）是活的，可视化那半从未上过屏。
+
+**为什么测试没发现**：24.1 的测试断言的是 `WorkshopStore.publishFlowStageIndex` 这个计算属性（站点推导正确），单元测试验不到"视图有没有被挂进视图树"。这类缺陷单测天然照不到。
+
+**实施**：
+1. `publishFlowIndicator` 挂到 `publicationHeaderPanel` 的状态控件下方（作者实际在用的布局），删除死掉的 `articleMetadata`。
+2. **死视图守卫**（`script/architecture_guard.sh`）：扫 `Views/*.swift` 里每个 `private var xxx: some View`，全文件只出现一次（即只有定义、无调用）就报错。全仓当前仅此一处违规，修完即净。**可失败性已实证**：临时删掉调用点，守卫如期报出 `ComposerView.swift: publishFlowIndicator` 并以 1 退出，随后还原。
+
+**残留边界**：守卫只覆盖 `private var ... some View` 这一种写法，`private func xxx() -> some View` 和跨文件的 `struct` 视图不在范围内（后者被别的文件引用是正常的，无法用单文件计数判定）。
