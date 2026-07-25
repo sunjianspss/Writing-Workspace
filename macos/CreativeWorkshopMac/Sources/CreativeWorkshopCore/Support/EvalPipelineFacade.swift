@@ -103,10 +103,23 @@ package struct EvalPipelineFacade {
         return "步骤(\(stepNames.count))：\(stepNames.joined(separator: "→"))；停止：\(stopReason)"
     }
 
+    /// 各管线生成动作实际取用的模板 key。App 的写作动作一律走 `prompt_templates` 里的模板
+    /// （`WorkshopStore.promptTemplate(for:)`），评测此前对这几个动作一律传 nil，量的是 App
+    /// 从不执行的内联 prompt——与 24.2「仪器修好了，教练没修」同一类断链，只是方向相反。
+    package static let pipelineTemplateKeys: [PromptTemplateKey] = [
+        .draft,
+        .outline,
+        .polishDraft,
+        .writingReview,
+        .agentDecision
+    ]
+
     private let database: NativeDatabase
     private let executor: AIWorkflowExecuting
     private let config: ModelConfig
     private let apiKey: String
+    /// 报告头用的模板来源摘要（24.5）：prompt 换了分数就不可比，和风格样本一样必须可见。
+    package let promptTemplateSummary: String
     /// 固定的评测风格样本（24.4）。App 的 `resolveStyle()` 会注入近期同体裁文章作 few-shot，
     /// 评测此前完全跳过这一步，量的是一个作者实际用不到的「零样本」配置。这里补上，但样本
     /// 来自版本控制的固定文件而非活库——量具的配置必须固定，否则分数会随语料增长漂移。
@@ -123,6 +136,23 @@ package struct EvalPipelineFacade {
         self.styleSamples = styleSamples
         self.database = try NativeDatabase(databaseURL: databaseURL)
         self.config = try database.modelConfig()
+        self.promptTemplateSummary = Self.summarizeTemplates(database: database)
+    }
+
+    /// 库里取模板；取不到（理论上不会，建库即 seed）就退回内联 prompt，并在报告头点名。
+    private func promptTemplate(_ key: PromptTemplateKey) -> PromptTemplate? {
+        try? database.promptTemplate(key: key)
+    }
+
+    private static func summarizeTemplates(database: NativeDatabase) -> String {
+        pipelineTemplateKeys.map { key in
+            guard let template = (try? database.promptTemplate(key: key)) ?? nil else {
+                return "\(key.title)(缺失→内联)"
+            }
+            // is_default = 0 意味着作者手改过这条模板：评测跑的就不是内置 prompt 了，必须点名。
+            return "\(key.title)(\(template.is_default == 0 ? "作者自定义" : "默认"))"
+        }
+        .joined(separator: "、")
     }
 
     package static func readAPIKey() -> String {
@@ -166,7 +196,7 @@ package struct EvalPipelineFacade {
         )
         let context = makeContext(stage: "评测：一步成稿", evalCase: evalCase, style: style, content: evalCase.content)
         let run = await executor.execute(
-            NativeWorkflowCatalog.draft(topic: topic, context: context, style: style, template: nil),
+            NativeWorkflowCatalog.draft(topic: topic, context: context, style: style, template: promptTemplate(.draft)),
             config: config,
             apiKey: apiKey
         )
@@ -210,7 +240,9 @@ package struct EvalPipelineFacade {
             materials: evalCase.materials,
             style: style,
             previousReview: nil,
-            writingReviewTemplate: nil,
+            // deep 内部这次诊断属于「生成路径」（诊断→修订闭环），App 侧同样传库内模板；
+            // 最终评分用的 scoringTemplate 是量具，固定在代码里，两者不要混为一谈。
+            writingReviewTemplate: promptTemplate(.writingReview),
             config: config,
             apiKey: apiKey
         )
@@ -245,6 +277,11 @@ package struct EvalPipelineFacade {
             config: config,
             apiKey: apiKey,
             callBudget: (try? database.agentCallBudget()) ?? 12,
+            decisionTemplate: promptTemplate(.agentDecision),
+            writingReviewTemplate: promptTemplate(.writingReview),
+            polishTemplate: promptTemplate(.polishDraft),
+            draftTemplate: promptTemplate(.draft),
+            outlineTemplate: promptTemplate(.outline),
             allowAskAuthor: false
         )
         let session = await WritingAgentCoordinator(executor: executor).run(input: input)

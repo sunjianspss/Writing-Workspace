@@ -208,4 +208,18 @@ final class EvalResultsStoreAndReportTests: XCTestCase {
 
         XCTAssertTrue(report.contains("风格样本：01-时间扑面而来、02-清白的人"))
     }
+
+    /// 生成动作用的是库内模板（24.5），模板换了分数同样不可比，报告头必须记下这一轮的模板来源。
+    func testReportRecordsPromptTemplateSource() {
+        let report = ReportGenerator.generate(
+            runID: "run-4",
+            runTimestamp: "2026-07-25T12:00:00Z",
+            gitDescribe: "abc123",
+            outcomes: [],
+            previousScores: [:],
+            promptTemplateSummary: "大纲成稿(默认)、生成大纲(作者自定义)"
+        )
+
+        XCTAssertTrue(report.contains("Prompt 模板：大纲成稿(默认)、生成大纲(作者自定义)"))
+    }
 }
