@@ -926,6 +926,15 @@ private struct PendingDraftReviewCard: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
+                // 24.9-P1：这次模型读的是你哪几篇文章。评测报告一直有「风格样本」行，App 侧
+                // 直到现在只能查库——"写出来不像我"最常见的原因就是样本取错了档。
+                if let samples = pending.styleSamples {
+                    Label(samples.summaryLine, systemImage: "text.book.closed")
+                        .font(.caption2)
+                        .foregroundStyle(samples.titles.isEmpty || samples.usedDraftFallback ? .orange : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if let note = pending.note,
                    !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     DisclosureGroup("本次生成说明") {

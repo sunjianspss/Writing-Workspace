@@ -63,7 +63,8 @@ extension WorkshopStore {
             retrievedFragments: retrievedFragments,
             sectionFragmentContexts: sectionFragmentContexts,
             iterationSummary: iterationSummary,
-            candidateJudgement: candidateJudgement
+            candidateJudgement: candidateJudgement,
+            styleSamples: lastStyleSampleProvenance
         )
         if clearArticleSelection {
             selectedArticleID = nil

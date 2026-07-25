@@ -1493,6 +1493,9 @@ package struct PendingDraftReview: Identifiable, Codable {
     package var candidateJudgement: CandidateJudgeResult?
     /// 23.6.5：有界代理循环会话摘要（共 N 步、每步动作与理由、停止原因）；非代理会话为空。
     package var agentSessionSummary: [String]?
+    /// 24.9-P1：本次生成注入了哪几篇 few-shot 风格样本、命中哪一档。评测报告早有「风格样本」
+    /// 行，App 侧一直看不见——作者怀疑"写出来不像我"时只能查库。
+    package var styleSamples: StyleSampleProvenance?
 
     package init(
         draftVersionID: Int,
@@ -1509,7 +1512,8 @@ package struct PendingDraftReview: Identifiable, Codable {
         sectionFragmentContexts: [SectionFragmentContext]? = nil,
         iterationSummary: [DeepDraftIteration]? = nil,
         candidateJudgement: CandidateJudgeResult? = nil,
-        agentSessionSummary: [String]? = nil
+        agentSessionSummary: [String]? = nil,
+        styleSamples: StyleSampleProvenance? = nil
     ) {
         self.draftVersionID = draftVersionID
         self.actionTitle = actionTitle
@@ -1526,6 +1530,7 @@ package struct PendingDraftReview: Identifiable, Codable {
         self.iterationSummary = iterationSummary
         self.candidateJudgement = candidateJudgement
         self.agentSessionSummary = agentSessionSummary
+        self.styleSamples = styleSamples
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -1544,6 +1549,31 @@ package struct PendingDraftReview: Identifiable, Codable {
         case iterationSummary
         case candidateJudgement
         case agentSessionSummary
+        case styleSamples
+    }
+}
+
+/// 本次生成注入的 few-shot 风格样本出处（24.9-P1）：篇名 + 命中档位 + 是否退到了草稿。
+/// 24.6 的残留边界写明「注入了哪几篇样本 App 界面上仍然看不见」，这个类型就是为补上它。
+package struct StyleSampleProvenance: Codable, Equatable {
+    package var tierLabel: String
+    package var titles: [String]
+    /// 一篇完成稿都没有时才会为真：范本是改到一半的草稿，腔调不可当准。
+    package var usedDraftFallback: Bool
+
+    package init(tierLabel: String, titles: [String], usedDraftFallback: Bool) {
+        self.tierLabel = tierLabel
+        self.titles = titles
+        self.usedDraftFallback = usedDraftFallback
+    }
+
+    /// 界面一行摘要。样本为空时也要说话——静默返回"（暂无样本文章…）"正是 24.3 的病根之一。
+    package var summaryLine: String {
+        guard !titles.isEmpty else {
+            return "本次未注入风格样本（模型只能靠几个抽象形容词模仿你）"
+        }
+        let suffix = usedDraftFallback ? "，草稿兜底" : ""
+        return "本次风格样本：\(titles.joined(separator: "、"))（\(tierLabel)\(suffix)）"
     }
 }
 

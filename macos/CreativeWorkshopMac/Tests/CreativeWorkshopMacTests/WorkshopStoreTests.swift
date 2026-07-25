@@ -1055,6 +1055,74 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertFalse(samples.contains { $0.contains("哀牢山地理志") }, "技术文会教出错的腔调")
     }
 
+    /// 24.9-P1：注入了哪几篇样本、命中哪一档，必须随待复核卡上屏。24.6 的残留边界写的是
+    /// 「App 界面上仍然看不见，作者只能查库」——这条测试钉住它已经看得见。
+    func testGeneratedDraftCarriesStyleSampleProvenanceToPendingReview() async throws {
+        let database = try makeDatabase()
+        for (title, genre, status) in [
+            ("哀牢山地理志", "技术分享", "已归档"),
+            ("惯养娇生笑你痴", "情感文学", "草稿"),
+            ("晴雯钻被窝", "情感文学", "已归档"),
+            ("叹香菱", "情感文学", "已发布")
+        ] {
+            _ = try database.saveArticle(
+                id: nil,
+                payload: ArticleSaveRequest(
+                    title: title,
+                    content: "\(title)的正文",
+                    summary: "摘要",
+                    status: status,
+                    tags: [],
+                    related_topic_id: nil,
+                    genre: genre
+                )
+            )
+        }
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.writingDirection = "情感文学"
+        store.ideaInput = "一个想法"
+        store.title = "标题"
+        store.content = "已有一版正文，用于触发全文润色并交付待复核。"
+
+        await store.polishDraft(.natural)
+
+        let pending = try XCTUnwrap(store.pendingDraftReview)
+        let samples = try XCTUnwrap(pending.styleSamples, "待复核卡必须带上本次注入的样本出处")
+        XCTAssertEqual(samples.tierLabel, "体裁精确匹配")
+        // 顺序不是契约（取决于库内近期排序），"是哪几篇"才是：两篇完成稿都在，草稿与技术文都不在。
+        XCTAssertEqual(Set(samples.titles), ["叹香菱", "晴雯钻被窝"], "只取同体裁完成稿")
+        XCTAssertFalse(samples.titles.contains("惯养娇生笑你痴"), "草稿不能当风格范本")
+        XCTAssertFalse(samples.titles.contains("哀牢山地理志"), "技术文会教出错的腔调")
+        XCTAssertFalse(samples.usedDraftFallback)
+        XCTAssertTrue(samples.summaryLine.contains("叹香菱"), "界面那一行要写明篇名：\(samples.summaryLine)")
+    }
+
+    /// 一篇完成稿都没有时退到草稿——界面必须标出来，否则作者以为读的是自己的成品腔调。
+    func testStyleSampleProvenanceFlagsDraftFallback() throws {
+        let database = try makeDatabase()
+        _ = try database.saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: "改到一半的稿",
+                content: "半成品正文",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "情感文学"
+            )
+        )
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.writingDirection = "情感文学"
+
+        _ = try store.resolveStyle()
+
+        let samples = try XCTUnwrap(store.lastStyleSampleProvenance)
+        XCTAssertTrue(samples.usedDraftFallback, "全是草稿时必须标明草稿兜底")
+        XCTAssertEqual(samples.titles, ["改到一半的稿"])
+        XCTAssertTrue(samples.summaryLine.contains("草稿兜底"), samples.summaryLine)
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)

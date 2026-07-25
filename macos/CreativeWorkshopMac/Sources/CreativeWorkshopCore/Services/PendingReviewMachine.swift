@@ -26,7 +26,8 @@ package struct PendingReviewMachine {
         retrievedFragments: [RetrievedFragment],
         sectionFragmentContexts: [SectionFragmentContext],
         iterationSummary: [DeepDraftIteration]?,
-        candidateJudgement: CandidateJudgeResult?
+        candidateJudgement: CandidateJudgeResult?,
+        styleSamples: StyleSampleProvenance? = nil
     ) throws -> (version: DraftVersion, pending: PendingDraftReview) {
         let version = try database.saveDraftVersion(
             articleID: articleID,
@@ -51,7 +52,8 @@ package struct PendingReviewMachine {
             retrievedFragments: retrievedFragments,
             sectionFragmentContexts: sectionFragmentContexts,
             iterationSummary: iterationSummary,
-            candidateJudgement: candidateJudgement
+            candidateJudgement: candidateJudgement,
+            styleSamples: styleSamples
         )
         return (version, pending)
     }

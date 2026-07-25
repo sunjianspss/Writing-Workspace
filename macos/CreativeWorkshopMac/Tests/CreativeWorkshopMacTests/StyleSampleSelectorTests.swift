@@ -65,6 +65,26 @@ final class StyleSampleSelectorTests: XCTestCase {
         XCTAssertEqual(selected.map(\.title), ["哀牢山地理志", "J-Space"])
     }
 
+    /// 24.9-P1：命中的是哪一档必须能报给界面——"精确同体裁"和"跨体裁凑数"对腔调的意义完全不同，
+    /// 作者怀疑"写出来不像我"时第一个要看的就是这个。
+    func testSelectionReportsWhichTierWasHit() {
+        let candidates = [
+            article("哀牢山地理志", genre: "技术分享"),
+            article("叹香菱", genre: "文学原著"),
+            article("晴雯钻被窝", genre: "情感文学")
+        ]
+
+        XCTAssertEqual(StyleSampleSelector.selection(from: candidates, genreKey: "文学原著").tier, .exact)
+        XCTAssertEqual(StyleSampleSelector.selection(from: candidates, genreKey: "文学原著").tier.label, "体裁精确匹配")
+        XCTAssertEqual(StyleSampleSelector.selection(from: candidates, genreKey: "经典文学解读").tier, .family)
+        XCTAssertEqual(
+            StyleSampleSelector.selection(from: [article("哀牢山地理志", genre: "技术分享")], genreKey: "经典文学解读").tier,
+            .cross,
+            "只剩技术文可取时要如实报「跨体裁凑数」，不能装作同族"
+        )
+        XCTAssertEqual(StyleSampleSelector.selection(from: [], genreKey: "经典文学解读").tier, .none)
+    }
+
     func testEmptyGenreKeyDoesNotMatchArticlesWithEmptyGenre() {
         let candidates = [article("无体裁旧稿", genre: nil), article("叹香菱", genre: "文学原著")]
 
