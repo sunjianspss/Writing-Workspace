@@ -978,6 +978,42 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(store.publishFlowStageIndex, 4)
     }
 
+    /// PRD 24.6：few-shot 样本必须是**完成稿**且**体裁同族**。
+    /// 24.3 只给"精确匹配落空"的兜底分支加了"草稿不参与"，精确命中的主路径照旧会把
+    /// 改到一半的草稿当风格范本；兜底又会跨体裁取到技术文，教出错的腔调。
+    func testResolveStyleSkipsDraftsAndCrossFamilyArticlesWhenPickingSamples() throws {
+        let database = try makeDatabase()
+        for (title, genre, status) in [
+            ("哀牢山地理志", "技术分享", "已归档"),
+            ("惯养娇生笑你痴", "情感文学", "草稿"),
+            ("晴雯钻被窝", "情感文学", "已归档")
+        ] {
+            _ = try database.saveArticle(
+                id: nil,
+                payload: ArticleSaveRequest(
+                    title: title,
+                    content: "\(title)的正文",
+                    summary: "摘要",
+                    status: status,
+                    tags: [],
+                    related_topic_id: nil,
+                    genre: genre
+                )
+            )
+        }
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        // 作者真实用的方向写法，与库里任何一篇的 genre 都不精确相等。
+        store.writingDirection = "经典文学解读"
+
+        let style = try store.resolveStyle()
+
+        let samples = style.sample_texts ?? []
+        XCTAssertEqual(samples.count, 1, "只有《晴雯钻被窝》够格：完成稿 + 体裁同族")
+        XCTAssertTrue(samples.contains { $0.contains("晴雯钻被窝") })
+        XCTAssertFalse(samples.contains { $0.contains("惯养娇生笑你痴") }, "草稿不能当风格范本")
+        XCTAssertFalse(samples.contains { $0.contains("哀牢山地理志") }, "技术文会教出错的腔调")
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)

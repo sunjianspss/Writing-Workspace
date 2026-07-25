@@ -1687,6 +1687,10 @@ package enum NativePrompts {
         return preferences.prefix(8).joined(separator: "；")
     }
 
+    /// 超长的样本/素材片段取头尾，中间省略处**必须显式写明丢了多少字**（24.6）。
+    /// 此前头尾之间只有一个空行，模型和作者都看不出这里有个洞，样本读起来像一篇
+    /// 结构断裂的文章——与 24.3 给素材修掉的是同一个毛病（作者库里 2615 字的《鸳鸯》
+    /// 已经过线）。
     private static func truncate(_ text: String, chunkSize: Int = 800) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > chunkSize * 3 else {
@@ -1694,7 +1698,7 @@ package enum NativePrompts {
         }
         let prefix = String(trimmed.prefix(chunkSize))
         let suffix = String(trimmed.suffix(chunkSize))
-        return "\(prefix)\n\n\(suffix)"
+        return "\(prefix)\n\n（此处省略中间 \(trimmed.count - chunkSize * 2) 字）\n\n\(suffix)"
     }
 
     private static func contextJSON(_ context: ContextPackage) -> String {

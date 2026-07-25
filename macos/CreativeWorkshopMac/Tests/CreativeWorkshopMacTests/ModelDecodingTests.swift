@@ -2003,6 +2003,54 @@ final class ModelDecodingTests: XCTestCase {
 
         XCTAssertEqual(json?["max_tokens"] as? Int, 8192)
     }
+
+    /// PRD 24.6：超长风格样本取头尾时，省略处必须显式写明丢了多少字。
+    /// 旧实现只在头尾之间放一个空行，模型读到的是一篇结构断裂却看不出断口的"作者范文"
+    /// （作者库里 2615 字的《鸳鸯》已经过线）。
+    func testLongStyleSampleKeepsHeadAndTailWithExplicitOmissionNote() {
+        let head = String(repeating: "头", count: 900)
+        let tail = String(repeating: "尾", count: 900)
+        let middle = String(repeating: "中", count: 700)
+        let style = StyleProfile(
+            id: 1,
+            name: "测试风格",
+            language_style: "中文",
+            tone: "克制",
+            structure_preference: "先场景后观察",
+            favorite_expressions: "",
+            forbidden_expressions: "",
+            sample_texts: [head + middle + tail],
+            title_style_like: nil,
+            title_style_dislike: nil,
+            is_default: 1
+        )
+        let context = ContextPackage(
+            stage: "构思阶段",
+            title: "",
+            summary: "",
+            idea: "想法",
+            direction: "情感文学",
+            outline_excerpt: "",
+            content_excerpt: "",
+            materials_excerpt: "",
+            selected_topic_title: nil,
+            selected_topic_summary: nil,
+            style_name: "测试风格",
+            style_brief: "",
+            word_count: 0,
+            paragraph_count: 0,
+            material_count: 0,
+            recent_article_titles: [],
+            recent_training_focus: [],
+            recent_issues: []
+        )
+
+        let prompt = NativePrompts.writingBrief(context: context, style: style).last?.content ?? ""
+
+        XCTAssertTrue(prompt.contains("（此处省略中间 900 字）"), "省略处必须写明丢了多少字")
+        XCTAssertTrue(prompt.contains(String(repeating: "头", count: 800)), "开头应保留")
+        XCTAssertTrue(prompt.contains(String(repeating: "尾", count: 800)), "结尾应保留——否则样本读起来像被掐了尾")
+    }
 }
 
 private struct StaticModelGateway: ModelGateway {
