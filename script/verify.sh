@@ -15,11 +15,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE_DIR="$ROOT_DIR/macos/CreativeWorkshopMac"
 SWIFTPM_STATE_DIR="$ROOT_DIR/.swiftpm-state"
 
+# `--guard-only` 在任意位置都认，其余参数原样留给 swift test。此前只看 `$1`，
+# `verify.sh --filter Xxx --guard-only` 会把 --guard-only 透传给 swift test 报错。
 guard_only=0
-if [[ "${1:-}" == "--guard-only" ]]; then
-  guard_only=1
-  shift
-fi
+test_args=()
+for arg in "$@"; do
+  if [[ "$arg" == "--guard-only" ]]; then
+    guard_only=1
+  else
+    test_args+=("$arg")
+  fi
+done
 
 # 与 build_and_run.sh 用同一套 SwiftPM 状态目录，避免两条命令互相把对方的增量构建冲掉。
 mkdir -p "$SWIFTPM_STATE_DIR/config" "$SWIFTPM_STATE_DIR/security" "$SWIFTPM_STATE_DIR/cache" "$SWIFTPM_STATE_DIR/module-cache"
@@ -35,4 +41,5 @@ if [[ "$guard_only" -eq 1 ]]; then
   exit 0
 fi
 
-swift test --disable-sandbox --package-path "$PACKAGE_DIR" "$@"
+# `${test_args[@]+...}`：bash 3.2（macOS 自带）下 `set -u` 会把空数组展开当未定义变量报错。
+swift test --disable-sandbox --package-path "$PACKAGE_DIR" ${test_args[@]+"${test_args[@]}"}

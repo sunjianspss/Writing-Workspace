@@ -64,6 +64,10 @@ package struct EvalPipelineFacade {
 
     /// 评测评分专用锚点模板（评测仪器修缮）：只在 eval 路径生效，不改动 App 内写作教练的
     /// 默认 prompt。目的：迫使分数按分档锚点给出、与问题清单互相一致，避免评分向 70 分档塌缩。
+    ///
+    /// 这里的锚点文案与 `NativePrompts.scoreAnchorBlock` 高度相似，但**不要合并**：那份是被测
+    /// 对象（App 的写作教练 prompt，会随质量迭代改动），这份是量具。量具跟着被测对象一起变，
+    /// 跨轮分数就不可比了。改这份 = 作废历史基线，要和换风格样本、换 prompt 同等对待。
     package static let scoringTemplate = PromptTemplate(
         id: -1,
         key: PromptTemplateKey.writingReview.rawValue,
@@ -143,7 +147,9 @@ package struct EvalPipelineFacade {
         self.promptTemplateSummary = Self.summarizeTemplates(database: database)
     }
 
-    /// 库里取模板；取不到（理论上不会，建库即 seed）就退回内联 prompt，并在报告头点名。
+    /// 库里取模板；取不到（理论上不会，建库即 seed）就传 nil，由 `NativePrompts` 退到
+    /// `defaultTemplate(key)`——24.11 删掉内联文案后这是同一份种子文案，不再是"另一份 prompt"。
+    /// 取不到这件事仍会在报告头点名，因为它说明库出了问题。
     private func promptTemplate(_ key: PromptTemplateKey) -> PromptTemplate? {
         try? database.promptTemplate(key: key)
     }
