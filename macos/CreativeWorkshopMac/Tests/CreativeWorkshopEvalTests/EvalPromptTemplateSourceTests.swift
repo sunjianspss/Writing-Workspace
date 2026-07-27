@@ -15,6 +15,8 @@ final class EvalPromptTemplateSourceTests: XCTestCase {
     private let decisionSentinel = "【模板哨兵-代理决策】"
     private let reviewSentinel = "【模板哨兵-写作诊断】"
     /// 只出现在内联 draft prompt 里的句子：修复前 direct 管线发出去的就是它。
+    /// 24.11 删掉了内联那份文案（P2-6，全仓已无第二份 prompt），这条断言从此是结构性成立的
+    /// 冗余保险；真正的守卫在 `PromptTemplateSingleSourceTests`。
     private let inlineDraftMarker = "技术概念必须解释清楚定义、价值、例子和边界"
 
     private func makeDatabaseURL() throws -> URL {

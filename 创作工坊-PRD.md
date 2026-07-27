@@ -2811,3 +2811,52 @@ schema 变更走 `PRAGMA user_version` 迁移。
 - 维度级趋势只对本次之后的运行有效，历史行的 `issue_dimensions` 为空（分数与三档计数仍可比）。
 - 维度串靠"最后一对括号"解析严重度，维度名自带括号也能正确取值；但若模型给出的 `severity` 是"高危"这类变体，会被当作另一个档位。
 - 样本出处只在待复核卡上；用户直接点「写作诊断」等不产出待复核版本的动作时，界面仍看不到样本。
+
+### 24.11 P2 结构债一次付清：验证命令 + 死视图守卫补盲 + prompt 单一文案 + Store 瘦身 + 大纲省略（已实施，2026-07-27）
+
+**背景**：24.9/24.10 之后清单上只剩 P2 五条（6-10 号）。作者要求一次做完，顺序为 10+8 → 6 → 9 → 7。
+
+#### P2-10 单条验证命令
+
+**证据**：`script/` 下只有 `architecture_guard.sh` 与 `build_and_run.sh`，且守卫**只挂在 `build_and_run.sh` 里**——只有"要跑 App"时才执行；`.git/hooks/` 下一个非 sample 钩子都没有；`swift test` 全靠手敲。于是"只改评测侧、没启动 App"的改动可以完整绕过守卫，24.7 的死视图就是这样溜过去的。
+
+**实施**：新增 `script/verify.sh`（守卫 + `swift test`，`--guard-only` 秒级自查，其余参数透传），复用 `build_and_run.sh` 的 `.swiftpm-state` 目录避免两条命令互相冲掉增量构建。未挂 pre-commit：全量测试挂进每次提交会把提交变成分钟级操作，得不偿失。
+
+#### P2-8 死视图守卫补盲
+
+**证据**：24.7 的守卫只认 `private var xxx: some View`，`private func … -> some View`（Views 下 46 处）与跨文件 `struct XxxView: View`（22 处）都在盲区。补上后**当场抓到一个真死的**：`ComposerView.compactPanel`（泛型 + `@ViewBuilder` 参数，定义了从没人调用）。
+
+**实施**：三类一起查——var / func（`perl -0777` 整文件匹配，兼容跨行签名与泛型）/ struct（引用计数范围放大到整个 `Sources/CreativeWorkshopMac`，因为 struct 视图是跨文件 new 的）。引用计数一律按 `\bname\b` 而不是 `name(`：`assets.map(hasUsableContent)` 这种裸函数引用是合法调用点，按 `name(` 数会误报（这个假阳性在实现过程中真的出现过一次）。删掉 `compactPanel`。**可失败性已实证**：造一个探针文件（死 struct + 跨行死 func + 活的 var），守卫准确报出前两个、放过第三个。
+
+#### P2-6 内置 prompt 只留一份文案
+
+**证据**（比原审计判断的更严重）：`NativeDatabase.open()` 每次都执行 `seedPromptTemplatesIfNeeded()`，作者库里 16 个 key 全部已落库、全部 `is_default = 1` 从未手改，而 `promptTemplate(for:)` 一定命中数据库行——**线上跑的永远是模板那份，`NativePrompts` 里的内联文案在生产路径上执行不到**。谁去改内联那份调质量，改完毫无效果、测试还是绿的。两份文案也确实早已漂移（内联版给写作诊断/定点改写/写作教练带了【作者风格样本】，模板版只有风格说明）。这是 24.2 与 24.5 同一个根因类别的第三次发作。
+
+**实施**：
+1. 删除 15 个 key 的内联文案（`NativePrompts` 1783 → 1174 行），改为 `template ?? defaultTemplate(key)`，`defaultTemplate` 由 `defaultPromptTemplates()` 的种子构造。**线上行为不变**（本来跑的就是这份），变的是"改文案有没有效果"不再取决于改的是哪一份。
+2. 新增 `PromptTemplateSingleSourceTests` 四条守卫：每个 key 都有种子且不重复；**传 nil 与传内置模板必须逐字相同**（谁再插一个内联分支立刻红）；渲染后不许残留 `{{变量}}`；以及测试自身必须覆盖全部 key（新增 key 忘了补，这条先红）。
+3. **顺带修好两处真缺口**：去重后 `testRewriteSelectionPromptReadsContextPackage` 与 `testCandidateJudgePromptReadsContextPackage` 转红——它们此前断言的是那份没人执行的内联 prompt。线上的 `rewrite_selection` 与 `candidate_judge` 模板都没有 `{{context_json}}`，也就是**定点改写与候选评判从来读不到正文、素材、作者雷区和已确认编辑偏好**（20.x 的记忆闭环有两条路径白建了）。两个模板补上上下文 JSON 块。
+
+**可失败性已实证**：重新长出一个内联分支 / 种子用一个没提供的变量 / 删掉一个 key 的种子，三条守卫分别如期失败。
+
+#### P2-9 WorkshopStore 瘦身（棘轮 2050 → 1700）
+
+**证据**：2016 行 / 棘轮 2050，余量仅 34 行。现在做恰恰因为**现在不急**：等下个功能来了再还，现实的选择就会变成把棘轮抬到 2100——棘轮就是这么废掉的。
+
+**实施**：拆出两个 extension 文件，2016 → 1660 行（−356），棘轮拧到 1700。
+- `WorkshopStore+StyleAndTemplates.swift`（113 行）：提示词模板与风格档案的编辑保存。
+- `WorkshopStore+TopicsAndIdeas.swift`（259 行）：素材（想法）与选题的增删改查 + 两条生成选题动作 + `defaultOutline`。
+
+**没有为了搬家放宽任何可见性**：模型设置与 API Key 那一组留在主文件，因为它们要读 `private let keychain`——密钥的可见范围不该为了少几行代码让步；`currentTopicPayload`/`topicPayload` 同理留下（「快速成稿」「大纲成稿」还要用）。搬动时发现并删掉一处失效注释：`defaultOutline` 头上顶着的是任务 21 搬走 `finalizeGeneratedDraft` 时遗落的文档。
+
+#### P2-7 大纲省略标注
+
+**证据与降级**：原审计判它"素材、样本都修了省略标注，大纲这路还在悄悄掐尾"，复核后**影响面小于该判断**：真正以大纲为主体的「大纲成稿」（WorkshopStore.swift:795 前后）与「写作诊断」都会用全量大纲覆盖 `outline_excerpt`，`DeepDraftCoordinator`/`WritingAgentCoordinator` 也传全量，真正吃这个摘要的只剩成稿自检的背景上下文。因此按"顺带处理"办：不做大改，只把静默掐尾换成与素材一路（24.3）相同的做法——留头 800 留尾 400、写明省略了多少字。大纲最后一段恰恰是"结尾设计"，prefix-only 丢掉的正是收束方式。`truncate` 随之无人使用，一并删除。
+
+**验证**：全量 229 项测试通过（224 → +5），`script/verify.sh` 一条命令跑完守卫与测试。
+
+**残留边界**：
+- P2-6 只统一了文案来源，**没有把内联版更详细的措辞提拔成线上模板**。已知差异：`writing_review`、`writing_advisor`、`rewrite_selection` 三份线上模板不带【作者风格样本】，只有风格说明；内联版都带。这是 prompt 质量判断而非重复问题，应当走评测比对后再定，不在本次静默改动。
+- `candidate_judge` 补了上下文 JSON 属于线上 prompt 变更，评测会跑到这一步；下一轮基线在该步上与 2026-07-25 那轮不严格可比。
+- 作者库里还有一行 `quick_draft` 模板：该 key 早已从 `PromptTemplateKey` 移除，是旧版本遗留的孤儿行，没有任何代码读它（设置页的模板列表仍会列出）。
+- 死视图守卫仍是静态引用计数：只被 `#Preview` 引用的视图会被判为存活。

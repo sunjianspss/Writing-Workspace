@@ -1183,12 +1183,6 @@ struct ComposerView: View {
         return "\(store.content.count) 字 · 选中一段正文后可局部改写"
     }
 
-    private func compactPanel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(10)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8))
-    }
-
     private func fieldCaption(_ text: String) -> some View {
         Text(text)
             .font(.caption)

@@ -37,7 +37,7 @@ package struct WritingContextBuilder {
             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines),
             idea: trimmedIdea,
             direction: direction.trimmingCharacters(in: .whitespacesAndNewlines),
-            outline_excerpt: truncate(trimmedOutline, limit: 1_200),
+            outline_excerpt: excerptOutline(trimmedOutline),
             content_excerpt: excerptContent(trimmedContent),
             materials_excerpt: excerptMaterials(materials.trimmingCharacters(in: .whitespacesAndNewlines)),
             selected_topic_title: selectedTopic?.title,
@@ -89,6 +89,21 @@ package struct WritingContextBuilder {
         return "\(prefix)\n\n（此处省略中间 \(text.count - 2_800) 字素材）\n\n\(suffix)"
     }
 
+    /// 大纲的省略（24.3 记为未处理，24.11 补上）。原先是 1200 字 prefix-only 掐尾——而大纲最后
+    /// 一段恰恰是"结尾设计"，静默丢掉的正是收束方式，且模型和作者都看不出丢过东西。
+    /// 与素材一路（`excerptMaterials`）保持同一种做法：留头留尾、写明省略了多少字。
+    ///
+    /// 影响面很小：真正以大纲为主体的「大纲成稿」「写作诊断」两条路径都会用全量大纲覆盖这里
+    /// 的值，剩下吃这个摘要的只有成稿自检的背景上下文。
+    private func excerptOutline(_ outline: String) -> String {
+        guard outline.count > 1_200 else {
+            return outline
+        }
+        let prefix = outline.prefix(800)
+        let suffix = outline.suffix(400)
+        return "\(prefix)\n\n（此处省略中间 \(outline.count - 1_200) 字大纲）\n\n\(suffix)"
+    }
+
     private func excerptContent(_ content: String) -> String {
         guard content.count > 2_000 else {
             return content
@@ -125,10 +140,4 @@ package struct WritingContextBuilder {
         .joined(separator: "\n")
     }
 
-    private func truncate(_ text: String, limit: Int) -> String {
-        guard text.count > limit else {
-            return text
-        }
-        return String(text.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
-    }
 }

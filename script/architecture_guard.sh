@@ -75,9 +75,17 @@ if [[ -n "$coordinator_chat_message_hits" ]]; then
   fail=1
 fi
 
-# 死视图守卫（24.7）：定义了却没有任何调用点的 `private var xxx: some View` 是不会被渲染的
-# 死代码。24.1 的发布流程指示条就这样"实施完成"却从未上过屏——单元测试只能验 Store 层的
-# 计算属性，验不到有没有被挂进视图树，只有这条静态检查拦得住。
+# 死视图守卫（24.7，24.11 补齐盲区）：定义了却没有任何调用点的视图片段是不会被渲染的死代码。
+# 24.1 的发布流程指示条就这样"实施完成"却从未上过屏——单元测试只能验 Store 层的计算属性，
+# 验不到有没有被挂进视图树，只有这条静态检查拦得住。
+#
+# 三类都要查，24.7 只查了第一类：
+#   1. `private var xxx: some View`
+#   2. `private func xxx(...) -> some View`（可带泛型、可跨行；24.11 发现 compactPanel 真的死在这里）
+#   3. `struct XxxView: View`（跨文件：定义了却没人 new，同样一行都不上屏）
+#
+# 引用计数一律按 `\bname\b` 而不是 `name(`：`assets.map(hasUsableContent)` 这种裸函数引用
+# 是合法调用点，按 `name(` 数会把它误报成死代码。
 dead_views=""
 while IFS= read -r file; do
   while IFS= read -r name; do
@@ -85,18 +93,36 @@ while IFS= read -r file; do
     if [[ "$(grep -c "\b${name}\b" "$file")" -le 1 ]]; then
       dead_views+="${file}: ${name}"$'\n'
     fi
-  done < <(grep -oE 'private var [a-zA-Z0-9_]+: some View' "$file" | awk '{print $3}' | tr -d ':')
+  done < <(
+    {
+      grep -oE 'private var [a-zA-Z0-9_]+: some View' "$file" | awk '{print $3}' | tr -d ':'
+      # 跨行签名（参数每行一个）用 perl 整文件匹配；`[^{]*?` 保证不越过函数体的第一个左花括号。
+      perl -0777 -ne 'while (/private\s+func\s+([A-Za-z0-9_]+)[^{]*?->\s*some\s+View\s*\{/gs) { print "$1\n" }' "$file"
+    }
+  )
 done < <(find "$SRC_DIR/Views" -name '*.swift' 2>/dev/null)
+
+# struct 视图是跨文件引用的，计数范围必须是整个 Sources/CreativeWorkshopMac（App 入口挂的
+# 根视图也在其中），只在单文件里数会把所有正常视图全判成死的。
+while IFS= read -r name; do
+  [[ -z "$name" ]] && continue
+  if [[ "$(grep -rhoE "\b${name}\b" "$SRC_DIR" | wc -l | tr -d ' ')" -le 1 ]]; then
+    dead_views+="struct ${name}"$'\n'
+  fi
+done < <(grep -rhoE 'struct [A-Za-z0-9_]+: *View\b' "$SRC_DIR" | sed -E 's/struct ([A-Za-z0-9_]+).*/\1/' | sort -u)
+
 if [[ -n "$dead_views" ]]; then
-  echo "ERROR: These private view properties are defined but never used; they render nowhere." >&2
+  echo "ERROR: These view fragments are defined but never used; they render nowhere." >&2
   echo "$dead_views" >&2
   fail=1
 fi
 
-# R5 瘦身棘轮：每完成一个瘦身任务把警戒线拧低一格，只降不升（任务 23 后为 2050）。
+# R5 瘦身棘轮：每完成一个瘦身任务把警戒线拧低一格，只降不升（任务 24 后为 1700）。
+# 24.11 拧到 1700 是趁手上没有功能压力还的债：此前余量只剩 34 行，下一个功能一来，
+# 现实的选择就会变成"把棘轮抬到 2100"——棘轮就是这么废掉的。
 store_lines="$(wc -l < "$STORE_FILE" | tr -d ' ')"
-if [[ "$store_lines" -gt 2050 ]]; then
-  echo "WARNING: WorkshopStore.swift is ${store_lines} lines; ratchet guardrail is 2050, final target is 1200." >&2
+if [[ "$store_lines" -gt 1700 ]]; then
+  echo "WARNING: WorkshopStore.swift is ${store_lines} lines; ratchet guardrail is 1700, final target is 1200." >&2
 fi
 
 exit "$fail"

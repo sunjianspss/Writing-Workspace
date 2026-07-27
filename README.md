@@ -60,7 +60,15 @@
 ./script/build_and_run.sh --verify
 ```
 
-本地终端跑原生端单元测试：
+提交前的单条验证命令（架构守卫 + 全量单元测试，PRD 24.11）：
+
+```bash
+./script/verify.sh              # 守卫 + 测试
+./script/verify.sh --guard-only # 只跑守卫，秒级
+./script/verify.sh --filter Xxx # 其余参数透传给 swift test
+```
+
+只想手敲测试时：
 
 ```bash
 env SWIFTPM_CONFIG_PATH="$PWD/.swiftpm-state/config" \
