@@ -2860,3 +2860,43 @@ schema 变更走 `PRAGMA user_version` 迁移。
 - `candidate_judge` 补了上下文 JSON 属于线上 prompt 变更，评测会跑到这一步；下一轮基线在该步上与 2026-07-25 那轮不严格可比。
 - 作者库里还有一行 `quick_draft` 模板：该 key 早已从 `PromptTemplateKey` 移除，是旧版本遗留的孤儿行，没有任何代码读它（设置页的模板列表仍会列出）。
 - 死视图守卫仍是静态引用计数：只被 `#Preview` 引用的视图会被判为存活。
+
+### 24.12 代理决策的纠正语从未进 prompt + 单一文案守卫补第四条（已实施，2026-07-27）
+
+**背景**：对 24.11 那次提交做复审。P2-6 把"内联文案在生产路径上执行不到"这一类缺口清了两处（`rewrite_selection`、`candidate_judge` 缺 `{{context_json}}`），**漏了第三处**，而且这一处的形态更隐蔽：不是模板少了变量，是函数根本没把参数放进 `variables`。
+
+**证据（完整链路）**：
+
+```
+WritingAgentCoordinator.swift:193   模型选出越界动作 → 写下纠正语
+NativeWorkflowCatalog.swift:413     原样传下去
+NativePrompts.agentDecision         收下 correctionNote → 丢弃（不在 variables 里）
+agent_decision 种子模板              没有任何对应占位符
+```
+
+修复前**只有内联那份 prompt 渲染它**（`correctionBlock`，见 24.11 之前的 `NativePrompts:1128`），而按 P2-6 的结论内联那份在生产路径上执行不到——也就是说**纠正重试这个机制线上从未生效过**。24.11 删掉内联文案，等于把它最后一处痕迹也抹了，`correctionNote` 变成一个可证明的死参数。
+
+**后果**：重试那一轮发出去的 prompt 与上一轮**只差一个递减的预算计数**，不带任何"上次为什么被拒"的信号——`state.lastAction` 与动作历史都在 `continue` 之前、还没更新，唯一会变的是 `usedCalls += 1`（`WritingAgentCoordinator.swift:164`，在有效性校验之前）带来的「剩余 12 次／已用 0 次 → 剩余 11 次／已用 1 次」。低温决策模型多半复读同一个越界动作，`consecutiveInvalidDecisions` 随即满额，会话以 `invalidDecision` 停机，白烧一次预算。
+
+**影响面（实测）**：全部历史评测报告里没有出现过 `决策纠正后仍越界，安全停机`，这条路径实际触发极少，因此**没有**在压 agentic 的分数。
+
+**为什么 24.11 的三条守卫没抓住**：三条都对"参数收下就扔"这一类隐形——两条路径都丢，渲染结果照样逐字相同；种子里本来就没有这个占位符，也不会留下 `{{}}`。
+
+**实施**：
+1. `agentDecision` 的 variables 补 `correction_note`，新增 `agentSessionCorrectionBlock`：有纠正语时渲染 `【纠正观察】` 块，无则**空串而不是省略这个 key**——省略会让 `{{correction_note}}` 原样发给模型。
+2. `agent_decision` 种子模板在 `{{budget}}` 与【可用动作】之间插入 `{{correction_note}}`，位置与被删的内联版一致；无纠正时渲染成一个空行，即排版与改前逐字相同。存量库经 `seedPromptTemplatesIfNeeded` 的 UPDATE 分支刷新（`is_default = 1` 且未手改过的行），作者本机直接吃到。
+3. **第四条守卫** `testEveryCallArgumentReachesTheRenderedPrompt`：`renderedPairs()` 改成带 `mustContain` 的结构体，夹具值换成「哨兵想法A1」这类不会与模板固定文案撞车的串，逐 key 断言传进去的参数真的出现在渲染结果里。带 `{{context_json}}` 的几个 key（polish / rewrite / candidate_judge）刻意只用**不在 context 里**的值当哨兵——否则 context_json 把整包塞进去，断言变成永真。
+4. `script/verify.sh` 的 `--guard-only` 改成任意位置都认：此前只看 `$1`，`verify.sh --filter Xxx --guard-only` 会把 `--guard-only` 透传给 `swift test` 报错。空数组展开用 `${test_args[@]+"${test_args[@]}"}` 兜住 macOS 自带 bash 3.2 + `set -u`。
+5. 三处过期注释：`EvalPipelineFacade` 取模板处（"退回内联 prompt" → 退到 `defaultTemplate`）、`scoreAnchorBlock`（24.11 后只剩一个消费者）、以及给 `EvalPipelineFacade.scoringTemplate` 补上**"不许与 `scoreAnchorBlock` 合并"**的理由——那份是被测对象、这份是量具，量具跟着被测对象变就跨轮不可比了。
+
+**可失败性已实证**：临时删掉 `correction_note` 那一行，新守卫如期报出 `agent_decision：传进去的「哨兵纠正T20」没有出现在 prompt 里`，随后还原。注意旧三条单独是抓不住原缺陷的：当时种子里没有这个占位符，"占位符残留"那条不会红（这次它跟着红，只是因为种子已经有了占位符）。
+
+**验证**：全量 230 项测试通过（229 → +1），`script/verify.sh` 守卫与测试全绿。
+
+**运行时实证**（不止跑测试）：本地桩模型服务（`127.0.0.1:8765`）+ 评测 CLI `--pipelines agentic --cases case-01`，桩在第一轮决策故意返回越界动作 `不存在的动作XYZ`，强制走这条历史 63 个会话中 0 次触发的分支。捕获到的重试轮请求确实带上了【纠正观察】块；同一轮产出的报告里会话轨迹为 `步骤(2)：决策→决策`，反过来证实"一次越界必然留下连续两个决策步"这个用来测量触发频率的方法成立。另外真 App 启动一次后，作者实库的 `agent_decision` 模板从 604 字增至 623 字、`{{correction_note}}` 落在偏移 149——开库刷新确实把存量库迁到位。桩跑全程零真实 API 花费，评测结果落在独立 cwd，实库改动跑完即从备份还原。
+
+**残留边界**：
+- **不构成 L2 重启条件里的"管线实质改动"，2026-07-25 基线不因此作废。** 无纠正语时 `{{correction_note}}` 渲染成空串，而它占的那一行改前本来就是空行——每一次**实际执行过**的决策调用，prompt 与改前逐字节相同。改动只落在一条从未走到过的分支上。
+- 上一条的判断依据不是"历史报告里没出现过 `决策纠正后仍越界，安全停机`"——那只证明没有**连续两次**越界，第一次越界后重试成功的情况不会在停止原因里留痕。正确的量法是会话步骤轨迹：决策步在校验之前就已入库，一次越界必然留下连续两个「决策」。**63 个历史 agentic 会话中 `决策→决策` 出现 0 次**，即纠正路径从未被触发过。
+- 新守卫只验"参数出现在渲染结果里"，不验位置与格式：模板把占位符放错地方，它照样绿。
+- 24.11 的三条残留（三份模板不带作者风格样本、`quick_draft` 孤儿行、`#Preview` 引用算存活）未动。

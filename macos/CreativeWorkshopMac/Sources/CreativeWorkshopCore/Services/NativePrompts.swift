@@ -331,7 +331,11 @@ package enum NativePrompts {
 
     /// 写作诊断评分锚点。不给锚点时模型评分会向 70 分档塌缩、且与 issues 清单脱钩——
     /// 实测同一份逐字节相同的正文，三次诊断给出 58/72/73，极差 15 分。
-    /// 内联 prompt 与 seed 模板共用这一份文案，避免两条路径再次漂移（本次修复的根因）。
+    ///
+    /// 24.2 抽出这个常量是为了让内联 prompt 与 seed 模板共用一份锚点；24.11 删掉内联文案后
+    /// 只剩下面 `writingReview` 种子一个消费者，常量留着是为了让"改锚点改哪里"仍然只有一个答案。
+    /// 注意评测量具（`EvalPipelineFacade.scoringTemplate`）另有一份措辞相近的锚点，那份是
+    /// **有意不合并**的，理由见那里的注释。
     static let scoreAnchorBlock = """
     评分锚点（必须落到锚点上，不要给 70 分档的"安全分"）：
     - 90–100：可直接发表。结构完整推进、细节具体真实、无任何高危问题、无腔调问题
@@ -548,9 +552,23 @@ package enum NativePrompts {
                 "draft_status": agentSessionDraftStatusBlock(state),
                 "action_history": agentSessionActionHistoryBlock(state),
                 "budget": agentSessionBudgetBlock(state),
+                "correction_note": agentSessionCorrectionBlock(correctionNote),
                 "available_actions": agentSessionAvailableActionsBlock(availableActions)
             ]
         ), mode: .decision)
+    }
+
+    /// 越界重试的纠正语（23.6）。修复前只有内联那份 prompt 渲染它，而内联那份在生产路径上
+    /// 执行不到（24.11 / P2-6 已把它删掉）——于是 `WritingAgentCoordinator` 写下的纠正语
+    /// 一路传到这里被丢弃，重试发出的 prompt 与上一轮逐字节相同（`lastAction` 与动作历史都
+    /// 还没更新），模型多半复读同一个越界动作，会话直接以 `invalidDecision` 停机。
+    ///
+    /// 无纠正时返回空串而不是省略这个 key：省略会让 `{{correction_note}}` 原样发给模型。
+    private static func agentSessionCorrectionBlock(_ note: String?) -> String {
+        guard let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ""
+        }
+        return "\n【纠正观察】\n\(note)\n"
     }
 
     private static func agentSessionGoalBlock(_ state: AgentSessionState) -> String {
@@ -937,7 +955,7 @@ package enum NativePrompts {
 
                 【剩余预算】
                 {{budget}}
-
+                {{correction_note}}
                 【可用动作】（只能从中选择，且必须满足括号内前置条件）
                 {{available_actions}}
 
