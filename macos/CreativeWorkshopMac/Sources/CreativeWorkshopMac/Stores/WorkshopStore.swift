@@ -27,6 +27,7 @@ final class WorkshopStore: ObservableObject {
     @Published var modelName: String = "deepseek-v4-pro"
     @Published var modelWorkflowOverridesText: String = "{}"
     @Published var apiKeyInput: String = ""
+    @Published private(set) var isAPIKeyConfigured: Bool = false
     @Published var databasePathText: String = ""
     @Published var latestReview: WritingReview?
     @Published var writingReviews: [WritingReview] = []
@@ -146,7 +147,9 @@ final class WorkshopStore: ObservableObject {
         self.keychain = keychain
         self.candidateShuffleRNG = AnyRandomNumberGenerator(candidateShuffleRNG)
         self.databasePathText = database.databaseURL.path
-        self.apiKeyInput = keychain.readAPIKey()
+        let storedAPIKey = keychain.readAPIKey()
+        self.apiKeyInput = storedAPIKey
+        self.isAPIKeyConfigured = !storedAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let config = try database.modelConfig()
         self.modelBaseURLText = config.baseURL
         self.modelName = config.model
@@ -295,6 +298,7 @@ final class WorkshopStore: ObservableObject {
             )
             self.modelWorkflowOverridesText = Self.prettyJSON(overrides)
             try self.keychain.saveAPIKey(self.apiKeyInput)
+            self.isAPIKeyConfigured = !self.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             self.runtimeStatus = self.database.runtimeStatus(model: self.normalizedModel)
             self.statusText = "模型设置已保存"
         }
@@ -310,6 +314,7 @@ final class WorkshopStore: ObservableObject {
         await run("清除 API Key") {
             try self.keychain.deleteAPIKey()
             self.apiKeyInput = ""
+            self.isAPIKeyConfigured = false
             self.runtimeStatus = self.database.runtimeStatus(model: self.normalizedModel)
             self.statusText = "API Key 已清除"
         }

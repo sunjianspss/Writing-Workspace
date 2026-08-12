@@ -6,6 +6,7 @@ struct ComposerView: View {
     @Binding var isInspectorVisible: Bool
     @SceneStorage("selectedComposerTab") private var selectedComposerTab: ComposerTab = .process
     @SceneStorage("isFocusWritingMode") private var isFocusWritingMode = false
+    @State private var isWeChatFormatterPresented = false
     private let articleStatuses = ["草稿", "已发布", "已归档"]
 
     var body: some View {
@@ -76,6 +77,13 @@ struct ComposerView: View {
             Button("稍后再说", role: .cancel) {}
         } message: {
             Text("系统保存了上次未正式保存的标题、摘要、正文、想法、大纲、素材和待复核状态。")
+        }
+        .sheet(isPresented: $isWeChatFormatterPresented) {
+            WeChatFormatterView(
+                title: store.title,
+                summary: store.summary,
+                content: store.content
+            )
         }
     }
 
@@ -519,16 +527,6 @@ struct ComposerView: View {
 
     private var topActionsFull: some View {
         HStack(spacing: 8) {
-            statusLabel
-
-            if store.canCancelCurrentOperation {
-                Button(role: .cancel) {
-                    store.cancelCurrentOperation()
-                } label: {
-                    Label("取消", systemImage: "xmark.circle")
-                }
-            }
-
             Button {
                 Task { await store.refreshAll() }
             } label: {
@@ -586,17 +584,6 @@ struct ComposerView: View {
 
     private var topActionsCompact: some View {
         HStack(spacing: 8) {
-            statusLabel
-
-            if store.canCancelCurrentOperation {
-                Button(role: .cancel) {
-                    store.cancelCurrentOperation()
-                } label: {
-                    Label("取消", systemImage: "xmark.circle")
-                }
-                .help("取消当前生成")
-            }
-
             Button {
                 Task { await store.refreshAll() }
             } label: {
@@ -656,14 +643,6 @@ struct ComposerView: View {
         .labelStyle(.iconOnly)
         .controlSize(.small)
         .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var statusLabel: some View {
-        Text(store.statusText)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
     }
 
     /// 24.1 发布流程指示条：让"已发布"作为数据链必经站自解释。
@@ -1040,6 +1019,14 @@ struct ComposerView: View {
             }
             .disabled(store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .help("复制正文，可选择 TXT、Markdown 或 HTML 格式。")
+
+            Button {
+                isWeChatFormatterPresented = true
+            } label: {
+                Label("公众号排版", systemImage: "doc.richtext")
+            }
+            .disabled(store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("预览公众号主题，并复制带内联样式的微信富文本。")
 
             Menu {
                 ForEach(PolishMode.allCases) { mode in

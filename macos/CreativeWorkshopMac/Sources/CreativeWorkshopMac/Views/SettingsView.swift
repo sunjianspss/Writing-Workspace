@@ -1,63 +1,127 @@
+import Foundation
 import SwiftUI
 import CreativeWorkshopCore
 
+private enum WorkshopSettingsTab: Hashable {
+    case model
+    case style
+    case prompts
+    case advanced
+}
+
 struct SettingsView: View {
     @ObservedObject var store: WorkshopStore
+    @State private var selectedTab: WorkshopSettingsTab = .model
+    @State private var isShowingClearAPIKeyConfirmation = false
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            Form {
-                settingsSections
+        VStack(spacing: 0) {
+            TabView(selection: $selectedTab) {
+                modelSettingsPage
+                    .tabItem { Label("模型", systemImage: "cpu") }
+                    .tag(WorkshopSettingsTab.model)
+
+                styleSettingsPage
+                    .tabItem { Label("风格", systemImage: "text.quote") }
+                    .tag(WorkshopSettingsTab.style)
+
+                promptSettingsPage
+                    .tabItem { Label("提示词", systemImage: "text.bubble") }
+                    .tag(WorkshopSettingsTab.prompts)
+
+                advancedSettingsPage
+                    .tabItem { Label("高级", systemImage: "slider.horizontal.3") }
+                    .tag(WorkshopSettingsTab.advanced)
             }
-            .padding(24)
+
+            WorkshopOperationStatusBar(
+                text: store.statusText,
+                isRunning: store.isLoading,
+                canCancel: store.canCancelCurrentOperation,
+                onCancel: { store.cancelCurrentOperation() }
+            )
         }
-        .frame(width: 760, height: 680)
+        .frame(minWidth: 760, idealWidth: 840, minHeight: 640, idealHeight: 720)
+        .confirmationDialog(
+            "清除 API Key？",
+            isPresented: $isShowingClearAPIKeyConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清除 API Key", role: .destructive) {
+                Task { await store.clearAPIKey() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("这会从钥匙串移除当前凭据。之后仍可重新填写并保存。")
+        }
     }
 
-    private var settingsSections: some View {
-        Group {
-            Section("模型") {
+    private var modelSettingsPage: some View {
+        settingsPage(
+            title: "模型",
+            subtitle: "配置默认模型与凭据；单个工作流的覆盖规则收纳在高级选项中。"
+        ) {
+            Section("连接") {
                 TextField("API Base URL", text: $store.modelBaseURLText)
-                    .frame(width: 380)
-                TextField("模型", text: $store.modelName)
-                    .frame(width: 380)
+                TextField("默认模型", text: $store.modelName)
                 SecureField("API Key", text: $store.apiKeyInput)
-                    .frame(width: 380)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("工作流模型路由 JSON")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.modelWorkflowOverridesText)
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 620)
-                        .frame(minHeight: 90)
-                        .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-                    Text("示例：{\"candidate_judge\":{\"model\":\"deepseek-v4-pro\",\"temperature\":0.4},\"draft_self_check\":{\"model\":\"cheap-model\",\"timeoutSeconds\":45}}")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+
+                LabeledContent("钥匙串状态") {
+                    Label(
+                        store.isAPIKeyConfigured ? "已保存" : "未保存",
+                        systemImage: store.isAPIKeyConfigured ? "key.fill" : "key"
+                    )
+                    .foregroundStyle(.secondary)
                 }
 
-                HStack {
+                if let model = store.runtimeStatus?.model {
+                    LabeledContent("当前运行模型") {
+                        Text(model)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+
+            Section {
+                HStack(spacing: WorkshopMetrics.controlSpacing) {
+                    Button("清除 API Key", role: .destructive) {
+                        isShowingClearAPIKeyConfirmation = true
+                    }
+                    .disabled(!store.isAPIKeyConfigured || store.isLoading)
+
+                    Spacer()
+
                     Button("保存模型设置") {
                         Task { await store.saveModelSettings() }
                     }
-                    Button("清除 API Key") {
-                        Task { await store.clearAPIKey() }
-                    }
-                    Text(store.runtimeStatus?.model ?? store.statusText)
-                        .foregroundStyle(.secondary)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isLoading)
                 }
             }
 
-            Section("本地数据") {
-                Text(store.databasePathText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+            Section("工作流模型路由") {
+                DisclosureGroup("按工作流覆盖默认模型") {
+                    WorkshopLabeledEditor(
+                        "路由规则（JSON）",
+                        text: $store.modelWorkflowOverridesText,
+                        minimumHeight: 120,
+                        hint: "示例：{\"candidate_judge\":{\"model\":\"deepseek-v4-pro\",\"temperature\":0.4}}",
+                        style: .code
+                    )
+                    .padding(.top, WorkshopMetrics.controlSpacing)
+                }
             }
+        }
+    }
 
-            Section("风格库") {
-                Picker("风格", selection: styleSelection) {
+    private var styleSettingsPage: some View {
+        settingsPage(
+            title: "风格",
+            subtitle: "把稳定偏好记录为可审阅的风格档案；自动归纳的规则必须人工确认。"
+        ) {
+            Section("风格档案") {
+                Picker("当前风格", selection: styleSelection) {
                     ForEach(store.styleProfiles) { profile in
                         Text(verbatim: styleTitle(profile))
                             .tag(profile.id)
@@ -67,75 +131,78 @@ struct SettingsView: View {
                             .tag(-1)
                     }
                 }
-                .frame(width: 420)
 
-                HStack {
+                TextField("风格名称", text: $store.styleName)
+                TextField("体裁标签", text: $store.styleGenre)
+                    .help("需与写作方向一致，才能命中对应风格档案。")
+
+                HStack(spacing: WorkshopMetrics.controlSpacing) {
                     Button("新建风格") {
                         store.newStyleProfile()
                     }
-                    Button("保存风格") {
-                        Task { await store.saveStyleProfile() }
-                    }
+
                     Button("设为默认") {
                         Task { await store.setSelectedStyleAsDefault() }
                     }
-                    .disabled(store.selectedStyleProfileID == nil || store.selectedStyleProfile?.is_default == 1)
-                }
+                    .disabled(
+                        store.selectedStyleProfileID == nil
+                            || store.selectedStyleProfile?.is_default == 1
+                            || store.isLoading
+                    )
 
-                TextField("风格名称", text: $store.styleName)
-                    .frame(width: 420)
-                TextField("体裁标签（如：情感文学随笔、经典文本再解读）", text: $store.styleGenre)
-                    .frame(width: 420)
-                    .help("按写作方向匹配风格档案，需与「写作方向」输入一致才能命中（18.3.4）。")
+                    Spacer()
+
+                    Button("保存风格") {
+                        Task { await store.saveStyleProfile() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isLoading)
+                }
+            }
+
+            Section("语言与结构") {
                 TextField("语言", text: $store.styleLanguage)
-                    .frame(width: 620)
                 TextField("语气", text: $store.styleTone)
-                    .frame(width: 620)
                 TextField("结构偏好", text: $store.styleStructure)
-                    .frame(width: 620)
                 TextField("常用表达", text: $store.styleFavorites)
-                    .frame(width: 620)
                 TextField("禁忌表达", text: $store.styleForbidden)
-                    .frame(width: 620)
+            }
+
+            Section("标题偏好") {
                 TextField("喜欢的标题", text: $store.styleTitleLike)
-                    .frame(width: 620)
                 TextField("不喜欢的标题", text: $store.styleTitleDislike)
-                    .frame(width: 620)
+            }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("体裁评价重点")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.styleGenreFocus)
-                        .font(.callout)
-                        .frame(width: 620)
-                        .frame(minHeight: 70)
-                        .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-                    Text("会拼入写作诊断和生成类提示词，例如「细节是否具体、情绪是否悬浮」（18.3.4）。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+            Section("写作参考") {
+                WorkshopLabeledEditor(
+                    "体裁评价重点",
+                    text: $store.styleGenreFocus,
+                    minimumHeight: 90,
+                    hint: "会用于写作诊断与生成，例如：细节是否具体、情绪是否悬浮。"
+                )
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("样本文本")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.styleSamplesText)
-                        .font(.callout)
-                        .frame(width: 620)
-                        .frame(minHeight: 140)
-                        .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-                    Text("多篇样本可用单独一行 --- 分隔。生成时会优先额外参考同体裁的近期文章。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                WorkshopLabeledEditor(
+                    "样本文本",
+                    text: $store.styleSamplesText,
+                    minimumHeight: 160,
+                    hint: "多篇样本用单独一行 --- 分隔；生成时还会参考同体裁的近期文章。"
+                )
+            }
 
+            Section("学习与校准") {
                 pitfallsSection
                 editPreferencesSection
             }
+        }
+    }
 
-            Section("提示词模板") {
-                Picker("模板", selection: promptTemplateSelection) {
+    private var promptSettingsPage: some View {
+        settingsPage(
+            title: "提示词",
+            subtitle: "按工作流维护模板。保存前可直接审阅系统指令、用户模板与占位符。"
+        ) {
+            Section("模板") {
+                Picker("当前模板", selection: promptTemplateSelection) {
                     ForEach(store.promptTemplates) { template in
                         Text(verbatim: promptTemplateTitle(template))
                             .tag(template.id)
@@ -145,176 +212,223 @@ struct SettingsView: View {
                             .tag(-1)
                     }
                 }
-                .frame(width: 420)
 
                 TextField("模板名称", text: $store.promptTemplateName)
-                    .frame(width: 420)
+            }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("System Prompt")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.promptTemplateSystemPrompt)
-                        .font(.callout)
-                        .frame(width: 620)
-                        .frame(minHeight: 80)
-                        .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-                }
+            Section("指令") {
+                WorkshopLabeledEditor(
+                    "System Prompt",
+                    text: $store.promptTemplateSystemPrompt,
+                    minimumHeight: 110
+                )
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("User Template")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextEditor(text: $store.promptTemplateUserTemplate)
-                        .font(.callout)
-                        .frame(width: 620)
-                        .frame(minHeight: 220)
-                        .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-                    Text("可用占位符会按工作流不同逐步扩展。全文润色当前支持：{{style_description}}、{{style_samples}}、{{context_json}}、{{content}}、{{polish_goal}}。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                WorkshopLabeledEditor(
+                    "User Template",
+                    text: $store.promptTemplateUserTemplate,
+                    minimumHeight: 250,
+                    hint: "全文润色支持：{{style_description}}、{{style_samples}}、{{context_json}}、{{content}}、{{polish_goal}}。"
+                )
+            }
 
-                Button("保存提示词模板") {
-                    Task { await store.savePromptTemplate() }
+            Section {
+                HStack {
+                    Spacer()
+                    Button("保存提示词模板") {
+                        Task { await store.savePromptTemplate() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.selectedPromptTemplateID == nil || store.isLoading)
                 }
-                .disabled(store.selectedPromptTemplateID == nil || store.isLoading)
+            }
+        }
+    }
+
+    private var advancedSettingsPage: some View {
+        settingsPage(
+            title: "高级",
+            subtitle: "查看本地数据位置，并管理尚未进入稳定工作流的实验功能。"
+        ) {
+            Section("本地数据") {
+                VStack(alignment: .leading, spacing: WorkshopMetrics.fieldSpacing) {
+                    Text("数据库路径")
+                        .font(.caption.weight(.semibold))
+                    Text(store.databasePathText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("实验室") {
-                Toggle("代理会话（实验室）", isOn: Binding(
-                    get: { store.agentLabEnabled },
-                    set: { store.setAgentLabEnabled($0) }
-                ))
-                Text("代理会话：模型在预算内自主决定写作步骤，产物仍需你确认。评测放行前默认关闭。")
-                    .font(.caption2)
+                Toggle(
+                    "代理会话",
+                    isOn: Binding(
+                        get: { store.agentLabEnabled },
+                        set: { store.setAgentLabEnabled($0) }
+                    )
+                )
+
+                Text("模型会在预算内自行安排写作步骤，但所有产物仍需你确认。评测放行前默认关闭。")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private func settingsPage<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: WorkshopMetrics.fieldSpacing) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, WorkshopMetrics.pagePadding)
+            .padding(.top, WorkshopMetrics.sectionSpacing)
+            .padding(.bottom, WorkshopMetrics.controlSpacing)
+
+            Form {
+                content()
+            }
+            .formStyle(.grouped)
+        }
+        .frame(maxWidth: WorkshopMetrics.settingsContentMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 
     private var pitfallsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("作者雷区清单")
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Button("从历史诊断归纳") {
-                    Task { await store.summarizeAuthorPitfalls() }
+        GroupBox("作者雷区清单") {
+            VStack(alignment: .leading, spacing: WorkshopMetrics.controlSpacing) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("从历史诊断生成候选，确认后才会影响写作。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("归纳") {
+                        Task { await store.summarizeAuthorPitfalls() }
+                    }
+                    .controlSize(.small)
+                    .disabled(store.selectedStyleProfileID == nil || store.isLoading)
                 }
-                .controlSize(.small)
-                .disabled(store.selectedStyleProfileID == nil || store.isLoading)
-            }
 
-            let confirmed = store.selectedStyleProfile?.known_pitfalls ?? []
-            if confirmed.isEmpty {
-                Text("暂无已确认的雷区。归纳结果需要人工确认后才会出现在这里。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(confirmed) { pitfall in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("· \(pitfall.description)")
-                            .font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("删除") {
-                            Task { await store.deleteConfirmedPitfall(pitfall) }
+                let confirmed = store.selectedStyleProfile?.known_pitfalls ?? []
+                if confirmed.isEmpty {
+                    Text("暂无已确认的雷区。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(confirmed) { pitfall in
+                        HStack(alignment: .top, spacing: WorkshopMetrics.controlSpacing) {
+                            Text("• \(pitfall.description)")
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("删除", role: .destructive) {
+                                Task { await store.deleteConfirmedPitfall(pitfall) }
+                            }
+                            .controlSize(.mini)
                         }
-                        .controlSize(.mini)
+                    }
+                }
+
+                if !store.pitfallCandidates.isEmpty {
+                    Divider()
+                    Text("待确认候选")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(store.pitfallCandidates, id: \.description) { candidate in
+                        HStack(alignment: .top, spacing: WorkshopMetrics.controlSpacing) {
+                            Text(candidate.description)
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("确认加入") {
+                                Task { await store.confirmPitfallCandidate(candidate) }
+                            }
+                            .controlSize(.mini)
+                            Button("忽略") {
+                                store.dismissPitfallCandidate(candidate)
+                            }
+                            .controlSize(.mini)
+                        }
                     }
                 }
             }
-
-            if !store.pitfallCandidates.isEmpty {
-                Divider()
-                Text("待确认候选")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(store.pitfallCandidates, id: \.description) { candidate in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(candidate.description)
-                            .font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("确认加入") {
-                            Task { await store.confirmPitfallCandidate(candidate) }
-                        }
-                        .controlSize(.mini)
-                        Button("忽略") {
-                            store.dismissPitfallCandidate(candidate)
-                        }
-                        .controlSize(.mini)
-                    }
-                }
-            }
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 620)
-        .padding(10)
-        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var editPreferencesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("编辑偏好校准")
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Button("从发布修改归纳") {
-                    Task { await store.summarizeEditPreferences() }
+        GroupBox("编辑偏好校准") {
+            VStack(alignment: .leading, spacing: WorkshopMetrics.controlSpacing) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("从发布前后的人工修改生成候选规则。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("归纳") {
+                        Task { await store.summarizeEditPreferences() }
+                    }
+                    .controlSize(.small)
+                    .disabled(store.selectedStyleProfileID == nil || store.isLoading)
                 }
-                .controlSize(.small)
-                .disabled(store.selectedStyleProfileID == nil || store.isLoading)
-            }
 
-            if !store.editRecordMonthlySummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(store.editRecordMonthlySummary)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+                if !store.editRecordMonthlySummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(store.editRecordMonthlySummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-            let confirmed = store.selectedStyleProfile?.learned_preferences ?? []
-            if confirmed.isEmpty {
-                Text("暂无已确认编辑偏好。发布后的人工修改会先形成候选规则，确认后才会影响生成。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(confirmed) { preference in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("· \(preference.description)")
-                            .font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("删除") {
-                            Task { await store.deleteConfirmedEditPreference(preference) }
+                let confirmed = store.selectedStyleProfile?.learned_preferences ?? []
+                if confirmed.isEmpty {
+                    Text("暂无已确认的编辑偏好。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(confirmed) { preference in
+                        HStack(alignment: .top, spacing: WorkshopMetrics.controlSpacing) {
+                            Text("• \(preference.description)")
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("删除", role: .destructive) {
+                                Task { await store.deleteConfirmedEditPreference(preference) }
+                            }
+                            .controlSize(.mini)
                         }
-                        .controlSize(.mini)
+                    }
+                }
+
+                if !store.editPreferenceCandidates.isEmpty {
+                    Divider()
+                    Text("待确认候选")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(store.editPreferenceCandidates, id: \.description) { candidate in
+                        HStack(alignment: .top, spacing: WorkshopMetrics.controlSpacing) {
+                            Text(candidate.description)
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("确认加入") {
+                                Task { await store.confirmEditPreferenceCandidate(candidate) }
+                            }
+                            .controlSize(.mini)
+                            Button("忽略") {
+                                store.dismissEditPreferenceCandidate(candidate)
+                            }
+                            .controlSize(.mini)
+                        }
                     }
                 }
             }
-
-            if !store.editPreferenceCandidates.isEmpty {
-                Divider()
-                Text("待确认候选")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(store.editPreferenceCandidates, id: \.description) { candidate in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(candidate.description)
-                            .font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("确认加入") {
-                            Task { await store.confirmEditPreferenceCandidate(candidate) }
-                        }
-                        .controlSize(.mini)
-                        Button("忽略") {
-                            store.dismissEditPreferenceCandidate(candidate)
-                        }
-                        .controlSize(.mini)
-                    }
-                }
-            }
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 620)
-        .padding(10)
-        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func promptTemplateTitle(_ template: PromptTemplate) -> String {
