@@ -47,6 +47,7 @@
 - 写作质量辅助：生成后自检、文学写作能力趋势、读者视角模拟、选题去重
 - 素材箱：`ideas` + `MaterialsView.swift`
 - 发布物料：`publish_assets` + `PublishAssetsResult`
+- 公众号排版：SwiftUI 原生工具栏 + `WKWebView` 离线排版预览，支持 19 套主题、Obsidian 图片、微信富文本复制及 Markdown/HTML/PNG/JPG/PDF 导出
 - API Key：`KeychainCredentialStore.swift`
 - 构建/运行脚本：`script/build_and_run.sh`
 
@@ -78,10 +79,10 @@ env SWIFTPM_CONFIG_PATH="$PWD/.swiftpm-state/config" \
   swift test --disable-sandbox --package-path macos/CreativeWorkshopMac
 ```
 
-写作质量评测（PRD 22.4.2）：独立于主 App 的 CLI，从 `evals/cases/` 读取用例，分别跑 direct/agent/deep 三条管线并用写作诊断打分，结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。需要先在 App 设置页配置好 API Key（保存在 Keychain）；没有 Key 时会直接报错退出，不会静默走本地 fallback。
+写作质量评测（PRD 22.4.2）：独立于主 App 的 CLI，从 `evals/cases/` 读取用例，分别跑 direct/agent/deep/agentic 四条管线并用写作诊断打分，结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。需要先在 App 设置页配置好 API Key（保存在 Keychain）；没有 Key 时会直接报错退出，不会静默走本地 fallback。
 
 ```bash
-swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --pipelines direct,agent,deep
+swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --pipelines direct,agent,deep,agentic
 ```
 
 全量一轮（28 用例 × 4 管线）约 8 小时。中断后用 `--resume` 续跑最近一次 run：已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮（PRD 24.9）。

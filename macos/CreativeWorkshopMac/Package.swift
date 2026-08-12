@@ -18,7 +18,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "CreativeWorkshopMac",
-            dependencies: ["CreativeWorkshopCore"]
+            dependencies: ["CreativeWorkshopCore"],
+            resources: [
+                .copy("Resources/WeChatFormatter")
+            ],
+            linkerSettings: [
+                .linkedFramework("WebKit")
+            ]
         ),
         .testTarget(
             name: "CreativeWorkshopMacTests",

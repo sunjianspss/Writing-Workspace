@@ -8,11 +8,20 @@ struct ContentView: View {
     private let inspectorVisibilityWidth: CGFloat = 940
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(selection: $selectedSidebarItem, store: store)
-                .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
-        } detail: {
-            detailContent
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                SidebarView(selection: $selectedSidebarItem, store: store)
+                    .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
+            } detail: {
+                detailContent
+            }
+
+            WorkshopOperationStatusBar(
+                text: store.statusText,
+                isRunning: store.isLoading,
+                canCancel: store.canCancelCurrentOperation,
+                onCancel: { store.cancelCurrentOperation() }
+            )
         }
     }
 
