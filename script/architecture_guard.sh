@@ -49,7 +49,7 @@ fi
 # 的写入入口不允许回流；其余尚未迁移的路径暂不纳入，避免把守卫变成一次性大爆炸。
 store_boundary_hits=""
 while IFS= read -r file; do
-  hits="$(grep -nE 'database[[:space:]]*\.[[:space:]]*(saveArticle|saveDraftVersion)[[:space:]]*\(|PendingReviewMachine[[:space:]]*\(|NativeWorkflowCatalog[[:space:]]*\.[[:space:]]*polishDraft[[:space:]]*\(' "$file" 2>/dev/null || true)"
+  hits="$(grep -nE 'database[[:space:]]*\.[[:space:]]*(saveArticle|saveDraftVersion|saveWritingAdvisorRun)[[:space:]]*\(|PendingReviewMachine[[:space:]]*\(|NativeWorkflowCatalog[[:space:]]*\.[[:space:]]*(polishDraft|rewriteSelection|writingAdvisor|readerPerspective)[[:space:]]*\(' "$file" 2>/dev/null || true)"
   if [[ -n "$hits" ]]; then
     store_boundary_hits+="${file}:"$'\n'"${hits}"$'\n'
   fi

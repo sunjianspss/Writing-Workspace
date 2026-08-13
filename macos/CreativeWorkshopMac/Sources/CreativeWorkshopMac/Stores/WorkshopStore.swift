@@ -797,45 +797,17 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("智能判断下一步", cancellable: true) {
-            let style = try self.resolveStyle()
-            let context = self.currentWritingContext(style: style)
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.writingAdvisor(
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .writingAdvisor)
-                )
-            ).writingAdvisorResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "智能判断下一步",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.next_action ?? response.result.main_problem ?? "完成智能下一步判断。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "智能判断下一步",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
+            let outcome = try await self.writingWorkflow.runWritingAdvisor(
+                self.analysisRequest(template: .writingAdvisor)
             )
-            let run = try self.database.saveWritingAdvisorRun(
-                result: response.result,
-                context: context,
-                articleID: self.selectedArticleID,
-                titleSnapshot: self.titleIfAvailable(),
-                model: self.normalizedModel
-            )
-            self.latestAdvisorRun = run
+            self.projectAgentRun(outcome.agentRun)
+            self.latestAdvisorRun = outcome.advisorRun
             self.advisorRuns = try self.database.listWritingAdvisorRuns()
-            self.statusText = response.success == true ? "已给出下一步建议" : "已使用本地建议：\(response.error ?? "未配置 API Key")"
+            self.statusText = self.analysisStatusText(
+                success: "已给出下一步建议",
+                fallbackPrefix: "已使用本地建议",
+                outcome: (outcome.usedFallback, outcome.error)
+            )
         }
     }
 
@@ -847,38 +819,40 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("读者视角模拟", cancellable: true) {
-            let style = try self.resolveStyle()
-            let context = self.currentWritingContext(style: style)
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.readerPerspective(
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .readerPerspective)
-                )
-            ).readerPerspectiveResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "读者视角模拟",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.drop_off_point ?? response.result.note ?? "完成读者视角模拟。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "读者视角模拟",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
+            let outcome = try await self.writingWorkflow.runReaderPerspective(
+                self.analysisRequest(template: .readerPerspective)
             )
-            self.latestReaderPerspective = response.result
-            self.statusText = response.success == true ? "已生成读者视角参考" : "已使用本地读者视角：\(response.error ?? "未配置 API Key")"
+            self.projectAgentRun(outcome.agentRun)
+            self.latestReaderPerspective = outcome.result
+            self.statusText = self.analysisStatusText(
+                success: "已生成读者视角参考",
+                fallbackPrefix: "已使用本地读者视角",
+                outcome: (outcome.usedFallback, outcome.error)
+            )
         }
+    }
+
+    /// 只读分析类工作流的共同请求装配。
+    private func analysisRequest(template key: PromptTemplateKey) throws -> WritingWorkflow.AnalysisRequest {
+        let style = try resolveStyle()
+        return WritingWorkflow.AnalysisRequest(
+            articleID: selectedArticleID,
+            titleSnapshot: titleIfAvailable(),
+            context: currentWritingContext(style: style),
+            style: style,
+            template: promptTemplate(for: key),
+            config: currentModelConfig,
+            apiKey: apiKeyInput
+        )
+    }
+
+    private func analysisStatusText(
+        success: String,
+        fallbackPrefix: String,
+        outcome: (usedFallback: Bool, error: String)
+    ) -> String {
+        guard outcome.usedFallback else { return success }
+        return "\(fallbackPrefix)：\(outcome.error.isEmpty ? "未配置 API Key" : outcome.error)"
     }
 
     func performAdvisorAction(_ action: AdvisorAction) {
@@ -918,71 +892,83 @@ final class WorkshopStore: ObservableObject {
 
         let surroundingText = contextAroundSelection(range)
         await run(mode.title, cancellable: true) {
-            let style = try self.resolveStyle()
-            let context = self.currentWritingContext(style: style).replacingTitle(self.titleIfAvailable())
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.rewriteSelection(
-                    context: context,
+            let outcome = try await self.writingWorkflow.rewriteSelection(
+                self.rewriteSelectionRequest(
                     selectedText: selectedText,
                     surroundingText: surroundingText,
                     mode: mode,
                     customInstruction: nil,
-                    style: style,
-                    template: self.promptTemplate(for: .rewriteSelection)
+                    actionTitle: mode.title,
+                    fallbackSummary: "完成局部改写。"
                 ),
                 onPartialOutput: self.streamingStatusCallback(actionName: mode.title)
-            ).rewriteSelectionResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: mode.title,
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.note ?? "完成局部改写。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: mode.title,
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
             )
+            self.projectAgentRun(outcome.agentRun)
 
-            let replacement = response.result.replacement ?? response.result.raw_output ?? ""
-            guard !replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                self.statusText = "模型没有返回可替换文本"
-                return
-            }
             let before = self.currentDraftSnapshot()
-            guard self.replaceSelectedContent(range: range, expectedText: selectedText, replacement: replacement) else {
+            guard self.replaceSelectedContent(
+                range: range,
+                expectedText: selectedText,
+                replacement: outcome.replacement
+            ) else {
                 self.statusText = "正文已变化，请重新选择后再改写"
                 return
             }
-            let note = response.result.note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let outcome = try self.writingWorkflow.execute(.recordDraftVersion(.init(
+
+            let versionOutcome = try self.writingWorkflow.execute(.recordDraftVersion(.init(
                 articleID: self.selectedArticleID,
                 titleSnapshot: self.titleIfAvailable(),
                 action: mode.title,
-                note: note?.isEmpty == false ? note : response.error,
+                note: outcome.note ?? outcome.error,
                 before: before,
                 after: self.currentDraftSnapshot()
             )))
-            guard case let .draftVersionRecorded(version) = outcome else {
+            guard case let .draftVersionRecorded(version) = versionOutcome else {
                 assertionFailure("WritingWorkflow returned an invalid version outcome")
                 return
             }
             self.draftVersions = [version] + self.draftVersions
-            if response.success == true {
-                self.statusText = note?.isEmpty == false ? "\(mode.title)已完成：\(note!)" : "\(mode.title)已完成"
+
+            if outcome.usedFallback {
+                self.statusText = "已使用本地改写：\(outcome.error.isEmpty ? "未配置 API Key" : outcome.error)"
+            } else if let note = outcome.note {
+                self.statusText = "\(mode.title)已完成：\(note)"
             } else {
-                self.statusText = "已使用本地改写：\(response.error ?? "未配置 API Key")"
+                self.statusText = "\(mode.title)已完成"
             }
         }
+    }
+
+    /// 两条改写路径（手动选区、诊断定点）共用的请求装配。
+    private func rewriteSelectionRequest(
+        selectedText: String,
+        surroundingText: String,
+        mode: RewriteMode,
+        customInstruction: String?,
+        actionTitle: String,
+        fallbackSummary: String
+    ) throws -> WritingWorkflow.RewriteSelectionRequest {
+        let style = try resolveStyle()
+        return WritingWorkflow.RewriteSelectionRequest(
+            articleID: selectedArticleID,
+            titleSnapshot: titleIfAvailable(),
+            context: currentWritingContext(style: style).replacingTitle(titleIfAvailable()),
+            selectedText: selectedText,
+            surroundingText: surroundingText,
+            mode: mode,
+            customInstruction: customInstruction,
+            style: style,
+            template: promptTemplate(for: .rewriteSelection),
+            config: currentModelConfig,
+            apiKey: apiKeyInput,
+            actionTitle: actionTitle,
+            fallbackSummary: fallbackSummary
+        )
+    }
+
+    /// 运行记录已由工作流落库，Store 只把它投影到列表顶部。
+    private func projectAgentRun(_ run: AgentRun) {
+        agentRuns = [run] + agentRuns.filter { $0.id != run.id }
     }
 
     /// Inspector 中"定位并改写"按钮据此判断是否展示改写入口（18.3.1 验收标准 1）。
@@ -1005,51 +991,26 @@ final class WorkshopStore: ObservableObject {
         let surroundingText = contextAroundSelection(range)
 
         await run("定点改写", cancellable: true) {
-            let style = try self.resolveStyle()
-            let context = self.currentWritingContext(style: style).replacingTitle(self.titleIfAvailable())
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.rewriteSelection(
-                    context: context,
+            let outcome = try await self.writingWorkflow.rewriteSelection(
+                self.rewriteSelectionRequest(
                     selectedText: selectedText,
                     surroundingText: surroundingText,
                     mode: .custom,
                     customInstruction: issue.suggestion,
-                    style: style,
-                    template: self.promptTemplate(for: .rewriteSelection)
+                    actionTitle: "定点改写",
+                    fallbackSummary: issue.suggestion
                 )
-            ).rewriteSelectionResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "定点改写",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.note ?? issue.suggestion,
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "定点改写",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
             )
-            let replacement = response.result.replacement ?? response.result.raw_output ?? ""
-            guard !replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                self.statusText = "模型没有返回可替换文本"
-                return
-            }
+            self.projectAgentRun(outcome.agentRun)
+
+            // 候选只暂存，必须经人工确认才会替换正文。
             self.pendingIssueRewrite = PendingIssueRewrite(
                 issue: issue,
                 range: range,
                 originalText: selectedText,
-                replacement: replacement,
-                note: response.result.note,
-                usedFallback: response.success != true
+                replacement: outcome.replacement,
+                note: outcome.note,
+                usedFallback: outcome.usedFallback
             )
             self.statusText = "已生成改写候选，请确认后替换正文"
         }
