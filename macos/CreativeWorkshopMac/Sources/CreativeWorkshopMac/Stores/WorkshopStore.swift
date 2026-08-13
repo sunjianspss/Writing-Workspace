@@ -441,45 +441,27 @@ final class WorkshopStore: ObservableObject {
 
         await run("生成大纲", cancellable: true) {
             let checkpoint = self.captureWritingSessionCheckpoint()
-            let style = try self.resolveStyle()
-            var context = self.currentWritingContext(style: style)
-            context.materials_excerpt = self.materials
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.outline(
-                    topic: topicPayload,
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .outline)
-                ),
+            var analysis = try self.analysisRequest(template: .outline)
+            analysis.context.materials_excerpt = self.materials
+
+            let outcome = try await self.writingWorkflow.generateOutline(
+                WritingWorkflow.OutlineRequest(analysis: analysis, topic: topicPayload),
                 onPartialOutput: self.streamingStatusCallback(actionName: "生成大纲")
-            ).outlineResponse
-            try Task.checkCancellation()
-            try self.requireWritingSessionCheckpoint(checkpoint)
-            try self.recordAgentRun(
-                runType: "生成大纲",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.title ?? "完成文章大纲。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "生成大纲",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
-            )
-            let result = response.result
-            if let generatedTitle = result.title, !generatedTitle.isEmpty {
+            ) {
+                // 生成期间作者动过稿件就整次作废，不留下没人用的大纲轨迹。
+                try self.requireWritingSessionCheckpoint(checkpoint)
+            }
+            self.projectAgentRun(outcome.agentRun)
+
+            if let generatedTitle = outcome.result.title, !generatedTitle.isEmpty {
                 self.title = generatedTitle
             }
-            self.outline = result.markdown
-            self.statusText = response.success == true ? "大纲已生成" : "已使用本地模拟大纲：\(response.error ?? "未配置 API Key")"
+            self.outline = outcome.result.markdown
+            self.statusText = self.analysisStatusText(
+                success: "大纲已生成",
+                fallbackPrefix: "已使用本地模拟大纲",
+                outcome: (outcome.usedFallback, outcome.error)
+            )
         }
     }
 
@@ -1428,41 +1410,5 @@ final class WorkshopStore: ObservableObject {
 
     private func reviewRevisionNote(_ review: WritingReview) -> String {
         WorkflowNarration.reviewRevisionNote(review)
-    }
-}
-
-private extension OutlineResult {
-    var markdown: String {
-        if let raw_output, !raw_output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return raw_output
-        }
-
-        var lines: [String] = []
-        if let title, !title.isEmpty {
-            lines.append("# \(title)")
-            lines.append("")
-        }
-        if let opening, !opening.isEmpty {
-            lines.append("## 开头")
-            lines.append(opening)
-            lines.append("")
-        }
-        for section in sections ?? [] {
-            if let heading = section.heading, !heading.isEmpty {
-                lines.append("## \(heading)")
-            }
-            for point in section.points ?? [] where !point.isEmpty {
-                lines.append("- \(point)")
-            }
-            if let hint = section.material_hint, !hint.isEmpty {
-                lines.append("素材位置：\(hint)")
-            }
-            lines.append("")
-        }
-        if let ending, !ending.isEmpty {
-            lines.append("## 结尾")
-            lines.append(ending)
-        }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

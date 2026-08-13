@@ -49,6 +49,7 @@ printf '%s\n' \
   '        _ = DeepDraftCoordinator(aiClient: fixture)' \
   '        _ = NativeWorkflowCatalog.publishAssets(context: fixture)' \
   '        _ = try database.savePublishAssets(result: fixture)' \
+  '        _ = NativeWorkflowCatalog.outline(topic: fixture)' \
   '    }' \
   '}' \
   > "$SRC_DIR/Stores/WorkshopStore+Fixture.swift"
@@ -90,7 +91,8 @@ for forbidden in \
   'NativeWorkflowCatalog.improveDraftFromReview' \
   'DeepDraftCoordinator' \
   'NativeWorkflowCatalog.publishAssets' \
-  'database.savePublishAssets'
+  'database.savePublishAssets' \
+  'NativeWorkflowCatalog.outline'
 do
   if ! grep -Fq "$forbidden" "$violation_output"; then
     echo "FAIL: guard diagnostic did not identify the injected violation: $forbidden" >&2
