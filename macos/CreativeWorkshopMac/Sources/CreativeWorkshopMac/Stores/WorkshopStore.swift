@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import UniformTypeIdentifiers
 import CreativeWorkshopCore
@@ -9,18 +10,48 @@ final class WorkshopStore: ObservableObject {
     @Published var articles: [Article] = []
     @Published var topics: [Topic] = []
     @Published var stats: OverviewStats?
-    @Published var selectedArticleID: Article.ID?
-    @Published var selectedTopicID: Topic.ID?
+    var selectedArticleID: Article.ID? {
+        get { writingSession.state.selectedArticleID }
+        set { writingSession.selectArticle(newValue) }
+    }
+    var selectedTopicID: Topic.ID? {
+        get { writingSession.state.selectedTopicID }
+        set { writingSession.selectTopic(newValue) }
+    }
     @Published var articleStatusFilter: String = "全部"
-    @Published var articleStatus: String = "草稿"
-    @Published var title: String = ""
-    @Published var summary: String = ""
-    @Published var content: String = ""
+    var articleStatus: String {
+        get { writingSession.state.articleStatus }
+        set { writingSession.setArticleStatus(newValue) }
+    }
+    var title: String {
+        get { writingSession.state.title }
+        set { writingSession.edit { $0.title = newValue } }
+    }
+    var summary: String {
+        get { writingSession.state.summary }
+        set { writingSession.edit { $0.summary = newValue } }
+    }
+    var content: String {
+        get { writingSession.state.content }
+        set { writingSession.edit { $0.content = newValue } }
+    }
     @Published var contentSelection: NSRange = NSRange(location: 0, length: 0)
-    @Published var outline: String = ""
-    @Published var ideaInput: String = ""
-    @Published var writingDirection: String = ""
-    @Published var materials: String = ""
+    var outline: String {
+        get { writingSession.state.outline }
+        set { writingSession.edit { $0.outline = newValue } }
+    }
+    var ideaInput: String {
+        get { writingSession.state.ideaInput }
+        set { writingSession.edit { $0.ideaInput = newValue } }
+    }
+    var writingDirection: String {
+        get { writingSession.state.writingDirection }
+        set { writingSession.edit { $0.writingDirection = newValue } }
+    }
+    var materials: String {
+        get { writingSession.state.materials }
+        set { writingSession.edit { $0.materials = newValue } }
+    }
     @Published var statusText: String = "准备就绪"
     @Published var isLoading: Bool = false
     @Published var modelBaseURLText: String = "https://api.deepseek.com"
@@ -79,17 +110,26 @@ final class WorkshopStore: ObservableObject {
 
     // MARK: - 18.3.2 诊断记忆与防空转
     /// 内容自上次诊断以来未变化时，先提示用户是否仍要重新诊断，而不是直接调用模型。
-    @Published var showUnchangedReviewPrompt: Bool = false
+    var showUnchangedReviewPrompt: Bool {
+        get { writingSession.state.showUnchangedReviewPrompt }
+        set { writingSession.setUnchangedReviewPromptVisible(newValue) }
+    }
 
     // MARK: - 18.3.1 诊断-改写闭环
     /// 由诊断 issue 触发的定点改写候选，需人工确认才写入正文。
-    @Published var pendingIssueRewrite: PendingIssueRewrite?
+    var pendingIssueRewrite: PendingIssueRewrite? {
+        get { writingSession.state.pendingIssueRewrite }
+        set { writingSession.setPendingIssueRewrite(newValue) }
+    }
 
     // MARK: - 18.3.5 / 18.4.1 生成后自检 + 待复核工作流
     /// 一键初稿/大纲成稿/全文润色产出的待复核候选：确认前正文已经预览显示，但版本仍标记为 pending。
-    @Published var pendingDraftReview: PendingDraftReview?
+    var pendingDraftReview: PendingDraftReview? { writingSession.state.pendingDraftReview }
     /// 最近一次生成后自检的结果，用于编辑器里的"建议复查"高亮/旁注。
-    @Published var latestSelfCheck: DraftSelfCheckResult?
+    var latestSelfCheck: DraftSelfCheckResult? {
+        get { writingSession.state.latestSelfCheck }
+        set { writingSession.setLatestSelfCheck(newValue) }
+    }
 
     // MARK: - 18.3.3 作者雷区归纳
     /// 从历史诊断归纳出的候选雷区，需人工确认才写入 `StyleProfile.known_pitfalls`。
@@ -98,28 +138,44 @@ final class WorkshopStore: ObservableObject {
     @Published var editPreferenceCandidates: [EditPreferenceCandidate] = []
 
     // MARK: - 18.4.3 读者视角模拟
-    @Published var latestReaderPerspective: ReaderPerspectiveResult?
+    var latestReaderPerspective: ReaderPerspectiveResult? {
+        get { writingSession.state.latestReaderPerspective }
+        set { writingSession.setLatestReaderPerspective(newValue) }
+    }
 
     // MARK: - 18.5.2 选题去重
     /// 最近一次生成选题时被判定为重复而过滤掉的候选，供作者知情（不是错误，只是提示）。
     @Published var lastFilteredDuplicateTopics: [TopicPayload] = []
 
     // MARK: - 19.3.1 自动保存与草稿恢复
-    @Published var showAutosaveRestorePrompt: Bool = false
+    var showAutosaveRestorePrompt: Bool {
+        get { writingSession.state.showAutosaveRestorePrompt }
+        set { writingSession.setAutosaveRestorePromptVisible(newValue) }
+    }
 
     // MARK: - 24.1 发布流程引导
     /// 文章未经"已发布"直接归档时的确认（跳过发布会缺失终审与编辑量记录）。
     @Published var showArchiveWithoutPublishPrompt: Bool = false
+    @Published var pendingSessionSwitch: PendingSessionSwitch?
+
+    enum PendingSessionSwitch {
+        case newDraft
+        case article(Article)
+    }
 
     let database: NativeDatabase
     let aiClient: AIWorkflowExecuting
+    let writingSession: WritingSession
+    let writingWorkflow: WritingWorkflow
     private let contextBuilder: WritingContextBuilder
     private let keychain: KeychainCredentialStore
     /// 22.3.4：候选评委呈现顺序的随机源，可注入固定种子以便测试复现打乱结果。
     var candidateShuffleRNG: AnyRandomNumberGenerator
-    var draftTags: [String] = []
-    var isApplyingAutosaveSnapshot = false
-    let autosave = AutosaveController()
+    var draftTags: [String] {
+        get { writingSession.state.tags }
+        set { writingSession.edit { $0.tags = newValue } }
+    }
+    private var writingSessionObservation: AnyCancellable? = nil
     private var currentOperationTask: Task<Void, Error>?
     private var currentOperationIsCancellable = false
     private var currentOperationName: String?
@@ -139,13 +195,19 @@ final class WorkshopStore: ObservableObject {
         aiClient: AIWorkflowExecuting? = nil,
         contextBuilder: WritingContextBuilder = WritingContextBuilder(),
         keychain: KeychainCredentialStore = KeychainCredentialStore(),
-        candidateShuffleRNG: RandomNumberGenerator = SystemRandomNumberGenerator()
+        candidateShuffleRNG: RandomNumberGenerator = SystemRandomNumberGenerator(),
+        writingSession: WritingSession? = nil
     ) throws {
         self.database = database
         self.aiClient = aiClient ?? NativeAIClient(recorder: database)
+        self.writingSession = writingSession ?? WritingSession()
+        self.writingWorkflow = WritingWorkflow(database: database, executor: self.aiClient)
         self.contextBuilder = contextBuilder
         self.keychain = keychain
         self.candidateShuffleRNG = AnyRandomNumberGenerator(candidateShuffleRNG)
+        self.writingSessionObservation = self.writingSession.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         self.databasePathText = database.databaseURL.path
         let storedAPIKey = keychain.readAPIKey()
         self.apiKeyInput = storedAPIKey
@@ -155,7 +217,6 @@ final class WorkshopStore: ObservableObject {
         self.modelName = config.model
         self.modelWorkflowOverridesText = Self.prettyJSON(config.workflowOverrides)
         self.runtimeStatus = database.runtimeStatus(model: config.model)
-        self.showAutosaveRestorePrompt = autosave.load() != nil
         self.agentLabEnabled = (try? database.agentLabEnabled()) ?? false
         self.agentCallBudget = (try? database.agentCallBudget()) ?? 12
     }
@@ -320,69 +381,6 @@ final class WorkshopStore: ObservableObject {
         }
     }
 
-    func newDraft() {
-        selectedArticleID = nil
-        selectedTopicID = nil
-        articleStatus = "草稿"
-        title = ""
-        summary = ""
-        content = ""
-        contentSelection = NSRange(location: 0, length: 0)
-        outline = ""
-        ideaInput = ""
-        materials = ""
-        draftTags = []
-        latestReview = nil
-        latestPublishAssets = nil
-        latestPrePublishAudit = nil
-        latestAdvisorRun = nil
-        agentRuns = []
-        draftVersions = []
-        resetTransientReviewState()
-        statusText = "已新建写作会话"
-    }
-
-    func openArticle(_ article: Article?) {
-        selectedArticleID = article?.id
-        articleStatus = article?.status ?? "草稿"
-        title = article?.title ?? ""
-        summary = article?.summary ?? ""
-        content = article?.content ?? ""
-        contentSelection = NSRange(location: 0, length: 0)
-        draftTags = article?.tags ?? []
-        if let genre = article?.genre?.trimmingCharacters(in: .whitespacesAndNewlines), !genre.isEmpty {
-            writingDirection = genre
-        }
-        if let id = article?.id {
-            latestReview = try? database.listWritingReviews(articleID: id, limit: 1).first
-            latestPublishAssets = try? database.listPublishAssets(articleID: id, limit: 1).first
-            latestPrePublishAudit = try? database.listPrePublishAudits(articleID: id, limit: 1).first
-            latestAdvisorRun = try? database.listWritingAdvisorRuns(articleID: id, limit: 1).first
-            agentRuns = (try? database.listAgentRuns(articleID: id, limit: 8)) ?? []
-            draftVersions = (try? database.listDraftVersions(articleID: id, limit: 8)) ?? []
-        } else {
-            latestReview = nil
-            latestPublishAssets = nil
-            latestPrePublishAudit = nil
-            latestAdvisorRun = nil
-            agentRuns = (try? database.listAgentRuns(limit: 8)) ?? []
-            draftVersions = []
-        }
-        resetTransientReviewState()
-    }
-
-    /// 切换文章/新建草稿时清空只属于"上一次会话"的临时状态，避免串场（诊断防空转提示、
-    /// 待确认的定点改写、待复核的生成结果、自检提示、读者视角）。
-    private func resetTransientReviewState() {
-        showUnchangedReviewPrompt = false
-        pendingIssueRewrite = nil
-        latestSelfCheck = nil
-        latestReaderPerspective = nil
-
-        // 未确认/未放弃就切走：视为隐式放弃，清理孤儿 pending 行（18.4.1，语义在 PendingReviewMachine）。
-        abandonOrphanedPendingReview()
-    }
-
     func quickDraft() async {
         guard !ideaInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusText = "请先输入想法"
@@ -390,6 +388,7 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("直接生成初稿", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let retrieval = try self.retrievedMaterialsBlock(query: self.ideaInput)
             var context = self.currentWritingContext(style: style)
@@ -428,7 +427,8 @@ final class WorkshopStore: ObservableObject {
                 clearArticleSelection: true,
                 agentTrace: self.agentDraftTrace(response),
                 retrievedFragments: FragmentRetriever.unique(retrieval.fragments + response.sectionFragmentContexts.flatMap(\.fragments)),
-                sectionFragmentContexts: response.sectionFragmentContexts
+                sectionFragmentContexts: response.sectionFragmentContexts,
+                checkpoint: checkpoint
             )
         }
     }
@@ -440,6 +440,7 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("生成大纲", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             var context = self.currentWritingContext(style: style)
             context.materials_excerpt = self.materials
@@ -453,6 +454,7 @@ final class WorkshopStore: ObservableObject {
                 onPartialOutput: self.streamingStatusCallback(actionName: "生成大纲")
             ).outlineResponse
             try Task.checkCancellation()
+            try self.requireWritingSessionCheckpoint(checkpoint)
             try self.recordAgentRun(
                 runType: "生成大纲",
                 status: response.success == true ? "success" : "fallback",
@@ -492,6 +494,7 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("大纲成稿", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             var context = self.currentWritingContext(style: style)
             context.outline_excerpt = self.outline
@@ -533,7 +536,8 @@ final class WorkshopStore: ObservableObject {
                 successNote: "根据当前大纲生成正文",
                 failureNote: response.error,
                 usedFallback: response.success != true,
-                clearArticleSelection: true
+                clearArticleSelection: true,
+                checkpoint: checkpoint
             )
         }
     }
@@ -545,48 +549,40 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run(mode.title, cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let context = self.currentWritingContext(style: style)
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.polishDraft(
+            let outcome = try await self.writingWorkflow.polish(
+                .init(
+                    articleID: checkpoint.articleID,
+                    titleSnapshot: checkpoint.titleSnapshot,
+                    before: checkpoint.before,
                     context: context,
-                    content: self.content,
                     mode: mode,
                     style: style,
-                    template: self.promptTemplate(for: .polishDraft)
+                    polishTemplate: self.promptTemplate(for: .polishDraft),
+                    selfCheckTemplate: self.promptTemplate(for: .draftSelfCheck),
+                    config: self.currentModelConfig,
+                    apiKey: self.apiKeyInput,
+                    styleSamples: self.lastStyleSampleProvenance
                 ),
-                onPartialOutput: self.streamingStatusCallback(actionName: mode.title)
-            ).draftResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: mode.title,
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.summary ?? mode.promptInstruction,
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: mode.title,
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
+                onPartialOutput: self.streamingStatusCallback(actionName: mode.title),
+                validateBeforeCommit: {
+                    try self.requireWritingSessionCheckpoint(checkpoint)
+                }
             )
-            try await self.finalizeGeneratedDraft(
-                result: response.result,
-                fallbackTitle: self.titleIfAvailable(),
-                style: style,
-                actionTitle: mode.title,
-                successNote: mode.promptInstruction,
-                failureNote: response.error,
-                usedFallback: response.success != true,
-                clearArticleSelection: false
-            )
+            do {
+                try self.writingSession.stage(outcome.pending, expectedRevision: checkpoint.revision)
+            } catch {
+                _ = try? self.writingWorkflow.execute(.cleanupPending(versionID: outcome.version.id))
+                throw error
+            }
+            if let tags = outcome.generatedTags { self.draftTags = tags }
+            self.agentRuns = [outcome.agentRun] + self.agentRuns.filter { $0.id != outcome.agentRun.id }
+            self.draftVersions = [outcome.version] + self.draftVersions
+            self.statusText = outcome.usedFallback
+                ? "已使用本地内容，请确认或放弃：\(outcome.error.isEmpty ? "未配置 API Key" : outcome.error)"
+                : "\(mode.title)已生成，请确认或放弃"
         }
     }
 
@@ -691,6 +687,7 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("按诊断改全文", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let context = self.currentWritingContext(style: style)
             let response = await self.executeWorkflow(
@@ -729,7 +726,8 @@ final class WorkshopStore: ObservableObject {
                 successNote: self.reviewRevisionNote(review),
                 failureNote: response.error,
                 usedFallback: response.success != true,
-                clearArticleSelection: false
+                clearArticleSelection: false,
+                checkpoint: checkpoint
             )
         }
     }
@@ -745,6 +743,7 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("深度成稿", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let retrieval = try self.retrievedMaterialsBlock(query: [self.title, self.ideaInput, self.outline].joined(separator: "\n"))
             let coordinator = DeepDraftCoordinator(aiClient: self.aiClient)
@@ -785,7 +784,8 @@ final class WorkshopStore: ObservableObject {
                 usedFallback: !output.success,
                 clearArticleSelection: false,
                 retrievedFragments: retrieval.fragments,
-                iterationSummary: output.iterations
+                iterationSummary: output.iterations,
+                checkpoint: checkpoint
             )
         }
     }
@@ -964,14 +964,18 @@ final class WorkshopStore: ObservableObject {
                 return
             }
             let note = response.result.note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let version = try self.database.saveDraftVersion(
+            let outcome = try self.writingWorkflow.execute(.recordDraftVersion(.init(
                 articleID: self.selectedArticleID,
                 titleSnapshot: self.titleIfAvailable(),
                 action: mode.title,
                 note: note?.isEmpty == false ? note : response.error,
                 before: before,
                 after: self.currentDraftSnapshot()
-            )
+            )))
+            guard case let .draftVersionRecorded(version) = outcome else {
+                assertionFailure("WritingWorkflow returned an invalid version outcome")
+                return
+            }
             self.draftVersions = [version] + self.draftVersions
             if response.success == true {
                 self.statusText = note?.isEmpty == false ? "\(mode.title)已完成：\(note!)" : "\(mode.title)已完成"
@@ -1124,33 +1128,17 @@ final class WorkshopStore: ObservableObject {
 
         let finalStatus = articleStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "草稿" : articleStatus
         await run(finalStatus == "已发布" ? "保存并发表前终审" : "保存文章", cancellable: finalStatus == "已发布") {
-            let titleSnapshot = self.titleIfAvailable()
-            // 覆盖保存前留住已存定稿：保存本身也记一条版本，作者可用「恢复前」回到保存前的内容。
             let previousSaved = self.selectedArticleID.flatMap { try? self.database.getArticle($0) }
-            let article = try self.database.saveArticle(
-                id: self.selectedArticleID,
-                payload: .draft(title: self.title, content: self.content, summary: self.summary, status: finalStatus, tags: self.draftTags, topicID: self.selectedTopicID, genre: self.normalizedDirection)
-            )
-            self.selectedArticleID = article.id
-            try self.database.attachDraftVersionsToArticle(articleID: article.id, titleSnapshot: titleSnapshot)
-            if let previousSaved {
-                let before = DraftSnapshot(
-                    title: previousSaved.title ?? "",
-                    summary: previousSaved.summary ?? "",
-                    content: previousSaved.content ?? ""
-                )
-                let after = self.currentDraftSnapshot()
-                if before != after {
-                    _ = try self.database.saveDraftVersion(
-                        articleID: article.id,
-                        titleSnapshot: titleSnapshot,
-                        action: "保存文章",
-                        note: "已覆盖旧定稿，「恢复前」可回到本次保存之前",
-                        before: before,
-                        after: after
-                    )
-                }
+            let outcome = try self.writingWorkflow.execute(.saveArticle(.init(
+                articleID: self.selectedArticleID,
+                payload: .draft(title: self.title, content: self.content, summary: self.summary, status: finalStatus, tags: self.draftTags, topicID: self.selectedTopicID, genre: self.normalizedDirection),
+                titleSnapshot: self.titleIfAvailable()
+            )))
+            guard case let .articleSaved(article, _) = outcome else {
+                assertionFailure("WritingWorkflow returned an invalid article outcome")
+                return
             }
+            self.writingSession.didSaveArticle(article)
             var auditNote = ""
             // 编辑量只在「非已发布 → 已发布」这一次跃迁上记；已发布状态下再保存不再追加，
             // 否则同一篇文章会被重复计数（24.8：香菱一次发布记出 7 条零改动）。
@@ -1165,7 +1153,6 @@ final class WorkshopStore: ObservableObject {
             self.draftVersions = try self.database.listDraftVersions(articleID: article.id, limit: 8)
             self.stats = try self.database.overviewStats()
             self.applyPublishingMetrics(try? PublishingMetricsRecorder(database: self.database).snapshot())
-            self.clearAutosaveSnapshot()
             self.statusText = auditNote.isEmpty ? "文章已保存" : "文章已保存；\(auditNote)"
         }
     }
@@ -1487,43 +1474,33 @@ final class WorkshopStore: ObservableObject {
         contentSelection = NSRange(location: 0, length: 0)
     }
 
+    /// 正文定位规则本身住在 `DraftTextLocator`（Core，可独立测试）；
+    /// Store 只负责把当前正文喂进去，再把结果投影回 `@Published` 状态。
+    private var textLocator: DraftTextLocator { DraftTextLocator(content) }
+
     private func selectedContentText(in range: NSRange) -> String? {
-        guard range.length > 0,
-              let swiftRange = Range(range, in: content) else {
-            return nil
-        }
-        return String(content[swiftRange])
+        textLocator.selectedText(in: range)
     }
 
-    /// 按诊断 issue 的 `excerpt` 在当前正文中定位一次精确匹配（18.3.1）。找不到时返回 nil，
-    /// 调用方必须据此提示"未找到对应片段"，不能猜测一个近似位置。
     private func locateExcerpt(_ excerpt: String?) -> NSRange? {
-        guard let excerpt else { return nil }
-        let trimmed = excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let swiftRange = content.range(of: trimmed) else {
-            return nil
-        }
-        return NSRange(swiftRange, in: content)
+        textLocator.locate(excerpt: excerpt)
     }
 
     private func contextAroundSelection(_ range: NSRange, radius: Int = 800) -> String {
-        guard let swiftRange = Range(range, in: content) else {
-            return String(content.prefix(radius * 2))
-        }
-        let leadingDistance = content.distance(from: content.startIndex, to: swiftRange.lowerBound)
-        let trailingDistance = content.distance(from: swiftRange.upperBound, to: content.endIndex)
-        let lowerBound = content.index(swiftRange.lowerBound, offsetBy: -min(radius, leadingDistance))
-        let upperBound = content.index(swiftRange.upperBound, offsetBy: min(radius, trailingDistance))
-        return String(content[lowerBound..<upperBound])
+        textLocator.context(around: range, radius: radius)
     }
 
     func replaceSelectedContent(range: NSRange, expectedText: String, replacement: String) -> Bool {
-        guard let swiftRange = Range(range, in: content),
-              String(content[swiftRange]) == expectedText else {
+        guard let result = textLocator.replacing(
+            range: range,
+            expectedText: expectedText,
+            with: replacement
+        ) else {
             return false
         }
-        content.replaceSubrange(swiftRange, with: replacement)
-        contentSelection = NSRange(location: range.location, length: replacement.utf16.count)
+
+        content = result.text
+        contentSelection = result.selection
         return true
     }
 
@@ -1535,97 +1512,32 @@ final class WorkshopStore: ObservableObject {
         return selectedTopic?.title ?? "未命名文章"
     }
 
+    /// 以下四个映射的规则住在 Core 的 `WorkflowNarration` / `TopicPayload`（可独立测试）；
+    /// Store 只负责把当前状态喂进去。
     private func currentTopicPayload() -> TopicPayload? {
-        let resolvedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let idea = ideaInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !resolvedTitle.isEmpty || !idea.isEmpty else {
-            return nil
-        }
-        return TopicPayload(
-            title: resolvedTitle.isEmpty ? String(idea.prefix(32)) : resolvedTitle,
-            direction: normalizedDirection,
-            core_viewpoint: idea.isEmpty ? nil : idea,
-            target_reader: nil,
-            description: idea.isEmpty ? summary : idea,
-            angle: summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : summary,
-            emotion: nil,
-            score: 3,
-            status: "待写",
-            tags: [normalizedDirection]
+        TopicPayload(
+            draftTitle: title,
+            idea: ideaInput,
+            summary: summary,
+            direction: normalizedDirection
         )
     }
 
     private func topicPayload(_ topic: Topic) -> TopicPayload {
-        TopicPayload(
-            title: topic.title,
-            direction: topic.direction,
-            core_viewpoint: topic.core_viewpoint,
-            target_reader: topic.target_reader,
-            description: topic.description,
-            angle: topic.angle,
-            emotion: topic.emotion,
-            score: topic.score,
-            status: topic.status,
-            tags: topic.tags
-        )
-    }
-
-    func applyDraft(_ result: DraftResult, fallbackTitle: String) {
-        title = result.title ?? fallbackTitle
-        summary = result.summary ?? summary
-        content = result.content ?? result.raw_output ?? content
-        draftTags = result.tags ?? draftTags
+        TopicPayload(topic: topic)
     }
 
     private func agentDraftNote(_ response: AgentDraftResponse) -> String {
-        [
-            "代理初稿流程：writing brief → 论点检查 → 分段成稿 → 自我批评。",
-            response.brief.core_question.map { "Brief 核心问题：\($0)" },
-            response.brief.thesis.map { "Brief 主张：\($0)" },
-            response.argumentCheck.revision_directives?.isEmpty == false
-                ? "论点检查指令：\(response.argumentCheck.revision_directives!.prefix(3).joined(separator: "；"))"
-                : nil,
-            response.critique.critique_notes?.isEmpty == false
-                ? "自我批评：\(response.critique.critique_notes!.prefix(3).joined(separator: "；"))"
-                : nil
-        ]
-        .compactMap { $0 }
-        .joined(separator: "\n")
+        WorkflowNarration.agentDraftNote(response)
     }
 
     private func agentDraftTrace(_ response: AgentDraftResponse) -> AgentDraftTrace {
-        AgentDraftTrace(
-            workingTitle: response.brief.working_title ?? response.result.title ?? "未命名代理初稿",
-            coreQuestion: response.brief.core_question ?? "未返回核心问题",
-            thesis: response.brief.thesis ?? "未返回核心主张",
-            targetReader: response.brief.target_reader ?? "未返回目标读者",
-            argumentDirectives: response.argumentCheck.revision_directives ?? [],
-            missingEvidence: response.argumentCheck.missing_evidence ?? [],
-            sectionSummaries: (response.sectionDraft.sections ?? []).map { section in
-                let heading = section.heading.trimmingCharacters(in: .whitespacesAndNewlines)
-                let check = section.self_check?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let check, !check.isEmpty {
-                    return "\(heading.isEmpty ? "未命名段落" : heading)：\(check)"
-                }
-                return heading.isEmpty ? String(section.content.prefix(40)) : heading
-            },
-            critiqueNotes: response.critique.critique_notes ?? [],
-            unresolvedGaps: response.brief.unresolved_gaps ?? [],
-            plannedSectionCount: response.brief.structure_plan?.count ?? 0
-        )
+        WorkflowNarration.agentDraftTrace(response)
     }
 
     private func reviewRevisionNote(_ review: WritingReview) -> String {
-        [
-            "根据写作教练诊断进行全文修订。",
-            "诊断摘要：\(review.summary)",
-            review.revision_plan.isEmpty ? nil : "修改顺序：\(review.revision_plan.prefix(4).joined(separator: "；"))",
-            review.training_focus.isEmpty ? nil : "训练重点：\(review.training_focus.prefix(3).joined(separator: "；"))"
-        ]
-        .compactMap { $0 }
-        .joined(separator: "\n")
+        WorkflowNarration.reviewRevisionNote(review)
     }
-
 }
 
 private extension OutlineResult {

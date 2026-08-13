@@ -4,36 +4,34 @@ import CreativeWorkshopCore
 /// 「待写选题」工作区页面：展示全部选题储备，选用后跳回创作画布。
 struct TopicsView: View {
     @ObservedObject var store: WorkshopStore
-    @Binding var sidebarSelection: SidebarItem
+    @Binding var selection: WorkspaceDestination
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                header
+        VStack(spacing: 0) {
+            WorkshopScreenHeader(group: "工作区", title: "待写选题") {
+                Text("共 \(store.topics.count) 条储备，选用后带入标题、想法和大纲草案")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
-                if store.topics.isEmpty {
-                    emptyState
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(store.topics) { topic in
-                            topicCard(topic)
+            ScrollView {
+                VStack(alignment: .leading, spacing: WorkshopMetrics.stackSpacing) {
+                    if store.topics.isEmpty {
+                        emptyState
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: WorkshopMetrics.controlSpacing) {
+                            ForEach(store.topics) { topic in
+                                topicCard(topic)
+                            }
                         }
                     }
                 }
+                .frame(maxWidth: 1_060, alignment: .leading)
+                .padding(WorkshopMetrics.pagePadding)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("待写选题")
-                .font(.title2.bold())
-            Text("共 \(store.topics.count) 条选题储备。选用后自动带入标题、想法和大纲草案，并回到创作画布。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var emptyState: some View {
@@ -43,11 +41,11 @@ struct TopicsView: View {
                 .foregroundStyle(.secondary)
             Text("暂无选题")
                 .font(.headline)
-            Text("在创作画布输入一个想法并点击「生成选题」，结果会存到这里。")
+            Text("在「创作过程」输入一个想法并点击「拓展选题」，结果会存到这里。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button("去创作画布") {
-                sidebarSelection = .articles
+            Button("去创作过程") {
+                selection = .process
             }
         }
         .frame(maxWidth: .infinity)
@@ -78,13 +76,13 @@ struct TopicsView: View {
             HStack {
                 Button("选用并开始写") {
                     store.useTopic(topic)
-                    sidebarSelection = .articles
+                    selection = .process
                 }
                 .buttonStyle(.borderedProminent)
 
                 Button("选用并生成大纲") {
                     store.useTopic(topic)
-                    sidebarSelection = .articles
+                    selection = .process
                     Task { await store.generateOutline() }
                 }
                 .disabled(store.isLoading)

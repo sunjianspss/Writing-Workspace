@@ -71,6 +71,7 @@ package struct CandidateSelectionOutput {
     package var shuffleRNG: AnyRandomNumberGenerator
 }
 
+@MainActor
 package struct CandidateSelectionCoordinator {
     /// 版本落库回调：before 恒为本次会话的基稿快照，由调用方捕获。
     package typealias SaveVersion = (_ action: String, _ note: String, _ after: DraftSnapshot) throws -> DraftVersion

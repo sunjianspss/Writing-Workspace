@@ -60,12 +60,12 @@ package struct PendingReviewMachine {
 
     /// 确认（18.4.1）：pending → confirmed，返回更新后的行。
     package func confirm(versionID: Int) throws -> DraftVersion {
-        try database.confirmDraftVersion(id: versionID)
+        try database.confirmPendingDraftVersion(id: versionID)
     }
 
     /// 放弃（18.4.1）：删除该行。正文回退到 pending.before 由调用方（持有编辑器状态的一方）执行。
     package func discard(versionID: Int) throws {
-        try database.deleteDraftVersion(id: versionID)
+        try database.deletePendingDraftVersion(id: versionID)
     }
 
     /// 孤儿清理（切换文章/新建草稿时的隐式放弃）：只删仍处 pending 的行，
@@ -75,6 +75,6 @@ package struct PendingReviewMachine {
               row.review_status == "pending" else {
             return
         }
-        try database.deleteDraftVersion(id: versionID)
+        try database.deletePendingDraftVersion(id: versionID)
     }
 }

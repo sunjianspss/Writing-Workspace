@@ -34,6 +34,9 @@ export SWIFTPM_SECURITY_PATH="$SWIFTPM_STATE_DIR/security"
 export SWIFTPM_CACHE_PATH="$SWIFTPM_STATE_DIR/cache"
 export CLANG_MODULE_CACHE_PATH="$SWIFTPM_STATE_DIR/module-cache"
 
+# 先验证守卫本身：干净 fixture 必须通过，注入 WorkshopStore 越界写入后必须失败。
+# 这样 CI 不只“运行了守卫”，还证明新增规则不是永远通过的空壳。
+bash "$ROOT_DIR/script/test_architecture_guard.sh"
 bash "$ROOT_DIR/script/architecture_guard.sh"
 
 if [[ "$guard_only" -eq 1 ]]; then

@@ -4,8 +4,20 @@ import CreativeWorkshopCore
 /// R5 瘦身·任务 21：待复核状态机的迁移语义在 Core 的 `PendingReviewMachine`，
 /// 本文件只保留"调机器 → 更新 @Published → statusText"的薄绑定与编辑器快照应用。
 extension WorkshopStore {
-    private var pendingReviewMachine: PendingReviewMachine {
-        PendingReviewMachine(database: database)
+    /// 会话切换只有在 pending 行已从数据库清理后才提交内存状态，避免旧任务异步回写新稿。
+    func resolvePendingBeforeSessionSwitch() throws -> Int? {
+        guard let pending = pendingDraftReview else { return nil }
+        _ = try writingWorkflow.execute(.cleanupPending(versionID: pending.draftVersionID))
+        resolvePendingDraftReviewContinuation(with: .discarded)
+        return pending.draftVersionID
+    }
+
+    private func draftSnapshot(applying result: DraftResult, fallbackTitle: String) -> DraftSnapshot {
+        DraftSnapshot(
+            title: result.title ?? fallbackTitle,
+            summary: result.summary ?? summary,
+            content: result.content ?? result.raw_output ?? content
+        )
     }
 
     /// 大范围生成动作的统一收口（18.3.5 / 18.4.1）：预览即时可见，同时以 pending 版本进入待复核。
@@ -22,13 +34,15 @@ extension WorkshopStore {
         retrievedFragments: [RetrievedFragment] = [],
         sectionFragmentContexts: [SectionFragmentContext] = [],
         iterationSummary: [DeepDraftIteration]? = nil,
-        candidateJudgement: CandidateJudgeResult? = nil
+        candidateJudgement: CandidateJudgeResult? = nil,
+        checkpoint: WritingSessionCheckpoint? = nil
     ) async throws {
-        let before = currentDraftSnapshot()
-        let articleID = selectedArticleID
-        let titleSnapshot = titleIfAvailable()
-        applyDraft(result, fallbackTitle: fallbackTitle)
-        let after = currentDraftSnapshot()
+        let checkpoint = checkpoint ?? captureWritingSessionCheckpoint()
+        let before = checkpoint.before
+        let expectedRevision = checkpoint.revision
+        let articleID = checkpoint.articleID
+        let titleSnapshot = checkpoint.titleSnapshot
+        let after = draftSnapshot(applying: result, fallbackTitle: fallbackTitle)
 
         var selfCheckContext = currentWritingContext(style: style)
         selfCheckContext.title = after.title
@@ -43,13 +57,11 @@ extension WorkshopStore {
             )
         ).draftSelfCheckResponse
         if Task.isCancelled {
-            applySnapshot(before)
             throw CancellationError()
         }
-        latestSelfCheck = selfCheckResponse.result
 
         let note = usedFallback ? failureNote : successNote
-        let delivered = try pendingReviewMachine.deliver(
+        let outcome = try writingWorkflow.execute(.deliverPending(.init(
             articleID: articleID,
             titleSnapshot: titleSnapshot,
             actionTitle: actionTitle,
@@ -65,15 +77,51 @@ extension WorkshopStore {
             iterationSummary: iterationSummary,
             candidateJudgement: candidateJudgement,
             styleSamples: lastStyleSampleProvenance
-        )
+        )))
+        guard case let .pendingDelivered(version, pending) = outcome else {
+            preconditionFailure("WritingWorkflow returned an invalid pending outcome")
+        }
+        do {
+            try writingSession.stage(pending, expectedRevision: expectedRevision)
+        } catch {
+            _ = try? writingWorkflow.execute(.cleanupPending(versionID: version.id))
+            throw error
+        }
+        if let tags = result.tags {
+            draftTags = tags
+        }
         if clearArticleSelection {
             selectedArticleID = nil
         }
-        draftVersions = [delivered.version] + draftVersions
-        pendingDraftReview = delivered.pending
+        draftVersions = [version] + draftVersions
         statusText = usedFallback
             ? "已使用本地内容，请确认或放弃：\(failureNote ?? "未配置 API Key")"
             : "\(actionTitle)已生成，请确认或放弃"
+    }
+
+    struct WritingSessionCheckpoint {
+        var revision: Int
+        var before: DraftSnapshot
+        var articleID: Int?
+        var titleSnapshot: String
+    }
+
+    func captureWritingSessionCheckpoint() -> WritingSessionCheckpoint {
+        WritingSessionCheckpoint(
+            revision: writingSession.state.revision,
+            before: currentDraftSnapshot(),
+            articleID: selectedArticleID,
+            titleSnapshot: titleIfAvailable()
+        )
+    }
+
+    func requireWritingSessionCheckpoint(_ checkpoint: WritingSessionCheckpoint) throws {
+        guard writingSession.state.revision == checkpoint.revision else {
+            throw WritingSession.TransitionError.candidateBasedOnStaleRevision(
+                expected: checkpoint.revision,
+                received: writingSession.state.revision
+            )
+        }
     }
 
     // MARK: - 待复核确认/放弃（18.4.1）
@@ -104,14 +152,15 @@ extension WorkshopStore {
             await confirmDraftVersion(version)
         } else {
             await run("确认版本") {
-                _ = try self.pendingReviewMachine.confirm(versionID: pending.draftVersionID)
+                let outcome = try self.writingWorkflow.execute(.confirmPending(pending))
+                guard case .pendingConfirmed = outcome else {
+                    preconditionFailure("WritingWorkflow returned an invalid confirmation outcome")
+                }
+                try self.writingSession.didConfirmPendingDraftReview(versionID: pending.draftVersionID)
+                self.resolvePendingDraftReviewContinuation(with: .confirmed)
                 self.statusText = "已确认为定稿"
             }
         }
-        pendingDraftReview = nil
-        latestSelfCheck = nil
-        saveAutosaveSnapshot()
-        resolvePendingDraftReviewContinuation(with: .confirmed)
     }
 
     /// 放弃当前"待复核"候选（18.4.1）：正文回退到生成前的版本，并从历史中移除这条从未落地的记录。
@@ -121,24 +170,41 @@ extension WorkshopStore {
             await discardDraftVersion(version)
         } else {
             await run("放弃版本") {
-                try self.pendingReviewMachine.discard(versionID: pending.draftVersionID)
-                self.applySnapshot(pending.before)
+                let outcome = try self.writingWorkflow.execute(.discardPending(
+                    pending,
+                    preservingCurrent: self.currentDraftSnapshot()
+                ))
+                guard case let .pendingDiscarded(_, _, preserved) = outcome else {
+                    preconditionFailure("WritingWorkflow returned an invalid discard outcome")
+                }
+                try self.writingSession.didDiscardPendingDraftReview(versionID: pending.draftVersionID)
+                if let preserved { self.draftVersions = [preserved] + self.draftVersions }
+                self.resolvePendingDraftReviewContinuation(with: .discarded)
                 self.statusText = "已放弃该版本"
             }
         }
-        pendingDraftReview = nil
-        latestSelfCheck = nil
-        saveAutosaveSnapshot()
-        resolvePendingDraftReviewContinuation(with: .discarded)
     }
 
     /// 供改稿版本列表里历史"待复核"记录使用（例如切换文章后再回来confirm）。
     func confirmDraftVersion(_ version: DraftVersion) async {
         await run("确认版本") {
-            let updated = try self.pendingReviewMachine.confirm(versionID: version.id)
+            let review = PendingDraftReview(
+                draftVersionID: version.id,
+                actionTitle: version.action,
+                articleID: version.article_id,
+                before: version.beforeSnapshot,
+                after: version.afterSnapshot,
+                note: version.note,
+                usedFallback: false,
+                matchedPitfalls: []
+            )
+            let outcome = try self.writingWorkflow.execute(.confirmPending(review))
+            guard case let .pendingConfirmed(updated) = outcome else {
+                preconditionFailure("WritingWorkflow returned an invalid confirmation outcome")
+            }
             self.draftVersions = self.draftVersions.map { $0.id == updated.id ? updated : $0 }
             if self.pendingDraftReview?.draftVersionID == version.id {
-                self.pendingDraftReview = nil
+                try self.writingSession.didConfirmPendingDraftReview(versionID: version.id)
                 self.resolvePendingDraftReviewContinuation(with: .confirmed)
             }
             self.statusText = "已确认为定稿"
@@ -147,24 +213,34 @@ extension WorkshopStore {
 
     func discardDraftVersion(_ version: DraftVersion) async {
         await run("放弃版本") {
-            try self.pendingReviewMachine.discard(versionID: version.id)
+            let review = PendingDraftReview(
+                draftVersionID: version.id,
+                actionTitle: version.action,
+                articleID: version.article_id,
+                before: version.beforeSnapshot,
+                after: version.afterSnapshot,
+                note: version.note,
+                usedFallback: false,
+                matchedPitfalls: []
+            )
+            let current = self.pendingDraftReview?.draftVersionID == version.id
+                ? self.currentDraftSnapshot()
+                : nil
+            let outcome = try self.writingWorkflow.execute(.discardPending(
+                review,
+                preservingCurrent: current
+            ))
+            guard case let .pendingDiscarded(_, _, preserved) = outcome else {
+                preconditionFailure("WritingWorkflow returned an invalid discard outcome")
+            }
             self.draftVersions.removeAll { $0.id == version.id }
+            if let preserved { self.draftVersions.insert(preserved, at: 0) }
             if self.pendingDraftReview?.draftVersionID == version.id {
-                self.applySnapshot(version.beforeSnapshot)
-                self.pendingDraftReview = nil
+                try self.writingSession.didDiscardPendingDraftReview(versionID: version.id)
                 self.resolvePendingDraftReviewContinuation(with: .discarded)
             }
             self.statusText = "已放弃该版本"
         }
-    }
-
-    /// 切换文章/新建草稿时的隐式放弃（18.4.1）：正文即将被覆盖，只清理孤儿 pending 行。
-    /// confirmed 行的保护在 PendingReviewMachine.cleanupOrphan 内强制。
-    func abandonOrphanedPendingReview() {
-        guard let orphaned = pendingDraftReview else { return }
-        pendingDraftReview = nil
-        Task { try? self.pendingReviewMachine.cleanupOrphan(versionID: orphaned.draftVersionID) }
-        resolvePendingDraftReviewContinuation(with: .discarded)
     }
 
     // MARK: - 版本恢复与定点改写候选
@@ -190,14 +266,17 @@ extension WorkshopStore {
                 return
             }
             let note = pending.note?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let version = try self.database.saveDraftVersion(
+            let outcome = try self.writingWorkflow.execute(.recordDraftVersion(.init(
                 articleID: self.selectedArticleID,
                 titleSnapshot: self.titleIfAvailable(),
                 action: "定点改写·\(pending.issue.dimension)",
                 note: note?.isEmpty == false ? note : "根据诊断建议改写",
                 before: before,
                 after: self.currentDraftSnapshot()
-            )
+            )))
+            guard case let .draftVersionRecorded(version) = outcome else {
+                preconditionFailure("WritingWorkflow returned an invalid version outcome")
+            }
             self.draftVersions = [version] + self.draftVersions
             self.pendingIssueRewrite = nil
             self.statusText = "已应用改写并替换正文"

@@ -1,93 +1,57 @@
 import Foundation
 import CreativeWorkshopCore
 
-/// R5 瘦身·任务 23：自动保存与草稿恢复（19.3.1）。存储与防抖在 Core 的 `AutosaveController`，
-/// 这里保留快照的字段收集与应用（纯 UI 状态绑定）。
+/// 自动保存的状态采集、调度和悬空 pending 修复均由 WritingSession 负责。
+/// Store 只提供数据库存在性投影，并在恢复后刷新与文章关联的只读集合。
 extension WorkshopStore {
     var hasAutosavedDraft: Bool {
-        autosave.load() != nil
-    }
-
-    func scheduleAutosaveSnapshot() {
-        guard !isApplyingAutosaveSnapshot else { return }
-        autosave.schedule { [weak self] in
-            self?.writeAutosaveSnapshot()
-        }
+        writingSession.hasAutosavedDraft
     }
 
     func saveAutosaveSnapshot() {
-        autosave.cancelPending()
-        writeAutosaveSnapshot()
-    }
-
-    private func writeAutosaveSnapshot() {
-        guard !isApplyingAutosaveSnapshot else { return }
-
-        let hasDraftContent = [
-            title,
-            summary,
-            content,
-            outline,
-            ideaInput,
-            materials
-        ]
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty == false
-
-        guard hasDraftContent || pendingDraftReview != nil else {
-            clearAutosaveSnapshot()
-            return
-        }
-
-        autosave.persist(
-            AutoSavedDraft(
-                selectedArticleID: selectedArticleID,
-                selectedTopicID: selectedTopicID,
-                articleStatus: articleStatus,
-                title: title,
-                summary: summary,
-                content: content,
-                outline: outline,
-                ideaInput: ideaInput,
-                writingDirection: writingDirection,
-                materials: materials,
-                draftTags: draftTags,
-                pendingDraftReview: pendingDraftReview,
-                latestSelfCheck: latestSelfCheck,
-                savedAt: Self.nowString()
-            )
-        )
+        writingSession.saveAutosaveSnapshotNow()
     }
 
     func restoreAutosavedDraft() {
-        guard let snapshot = autosave.load() else {
-            showAutosaveRestorePrompt = false
+        let result = writingSession.restoreAutosavedDraft(
+            articleStatus: { [database] id in
+                do {
+                    return try database.articleExists(id: id) ? .valid : .missing
+                } catch {
+                    return .unknown
+                }
+            },
+            topicStatus: { [database] id in
+                do {
+                    return try database.topicExists(id: id) ? .valid : .missing
+                } catch {
+                    return .unknown
+                }
+            },
+            pendingVersionStatus: { [database] id in
+                let version: DraftVersion?
+                do {
+                    version = try database.draftVersion(id: id)
+                } catch {
+                    return .unknown
+                }
+                guard let version else {
+                    return .missing
+                }
+                return version.review_status == "pending" ? .pending : .confirmed
+            }
+        )
+
+        if result == .deferredUntilDatabaseAvailable {
+            statusText = "暂时无法校验恢复草稿，已保留快照，请稍后重试"
+            return
+        }
+        guard result != .unavailable else {
             statusText = "没有可恢复的草稿"
             return
         }
 
-        isApplyingAutosaveSnapshot = true
-        defer { isApplyingAutosaveSnapshot = false }
-
-        selectedArticleID = snapshot.selectedArticleID.flatMap { id in
-            articles.contains(where: { $0.id == id }) ? id : nil
-        }
-        selectedTopicID = snapshot.selectedTopicID.flatMap { id in
-            topics.contains(where: { $0.id == id }) ? id : nil
-        }
-        articleStatus = snapshot.articleStatus
-        title = snapshot.title
-        summary = snapshot.summary
-        content = snapshot.content
         contentSelection = NSRange(location: 0, length: 0)
-        outline = snapshot.outline
-        ideaInput = snapshot.ideaInput
-        writingDirection = snapshot.writingDirection
-        materials = snapshot.materials
-        draftTags = snapshot.draftTags
-        pendingDraftReview = snapshot.pendingDraftReview
-        latestSelfCheck = snapshot.latestSelfCheck
         if let selectedArticleID {
             latestReview = try? database.listWritingReviews(articleID: selectedArticleID, limit: 1).first
             latestPublishAssets = try? database.listPublishAssets(articleID: selectedArticleID, limit: 1).first
@@ -99,18 +63,28 @@ extension WorkshopStore {
             latestAdvisorRun = nil
             draftVersions = []
         }
-        showAutosaveRestorePrompt = false
-        statusText = "已恢复未保存草稿"
+
+        switch result {
+        case let .restoredAfterDroppingDanglingPending(versionID):
+            statusText = "已恢复草稿；待复核版本 #\(versionID) 已不存在，正文已安全回退"
+        case let .restoredAfterReconcilingConfirmedPending(versionID):
+            statusText = "已恢复草稿；版本 #\(versionID) 已确认，正文已采用定稿"
+        case .restored:
+            statusText = "已恢复未保存草稿"
+        case .deferredUntilDatabaseAvailable:
+            break
+        case .unavailable:
+            break
+        }
     }
 
     func discardAutosavedDraft() {
-        clearAutosaveSnapshot()
-        showAutosaveRestorePrompt = false
+        writingSession.discardAutosavedDraft()
         statusText = "已丢弃未保存草稿"
     }
 
     func clearAutosaveSnapshot() {
-        autosave.clear()
+        writingSession.discardAutosavedDraft()
     }
 
     static func nowString() -> String {

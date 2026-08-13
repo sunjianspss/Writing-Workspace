@@ -13,11 +13,17 @@ spacing:
 components:
   operation-status:
     rounded: "{rounded.control}"
-    height: "30px"
+    height: "32px"
     padding: "6px 12px"
   labeled-editor:
     rounded: "{rounded.control}"
     padding: "8px"
+  navigation-column:
+    width: "252px"
+    row-rounded: "6px"
+    row-padding: "6px 8px"
+  screen-header:
+    padding: "12px 20px"
 ---
 
 # Design System: Creative Workshop
@@ -45,7 +51,7 @@ This is an Operate surface. Familiar macOS behavior, scanability, keyboard effic
 
 ## Colors
 
-App chrome uses SwiftUI and AppKit semantic colors so contrast and appearance adapt with macOS. Production code owns the resolved values; this document owns their roles.
+Appearance is the author's choice: Follow System, Light, or Dark, set in Settings → Advanced or from the navigation column footer. The navigation column, screen headers, and status bar take their values from `WorkshopPalette`, whose every token is an AppKit dynamic color resolving per appearance, so all three settings hold. Everything else continues to use SwiftUI and AppKit semantic colors. Semantic colors take darker variants on light grounds so contrast survives both. Production code owns the resolved values; this document owns their roles.
 
 - **Accent** — primary action, current selection, and active progress only.
 - **Primary text** — article content, headings, and decisive labels.
@@ -69,15 +75,19 @@ Long explanatory prose should remain near a 65–75 character measure. Do not sh
 
 ## Layout
 
-The primary shell remains Sidebar → Composer → optional Inspector. The Composer owns the current task. Sidebar owns navigation and recent records. Inspector owns supporting context, diagnosis, publishing evidence, and library projections; it must not become a second primary workflow.
+The primary shell is two columns: a navigation column and a content column. The navigation column is the single source of navigation and ends in a footer holding Settings, the appearance switch, and the author identity. The content column shows exactly one destination at a time and carries the status bar at its bottom. There is no persistent inspector column.
+
+Every destination is one of two groups. **Current draft** destinations follow the open article—writing process, article body, publishing assets, diagnosis review, and pre-publish audit—and the group stays visible so the open draft, its status, and any pending review are always legible. **Workspace** destinations are cross-article libraries: articles, topics, materials, and the reference library. A collapsed Recents affordance in the navigation column is a shortcut, not the article list; the article list is its own destination.
+
+Because no third column exists, a screen that needs before/after comparison splits inside the content column and must offer an explicit return to the article body. Every content screen opens with a breadcrumb header naming its group and title, so the column always self-identifies.
 
 Spacing follows the production semantic scale: field 6, control 8, stack 12, section 16, page 20 points. Tight spacing expresses one group; larger spacing marks a new decision. Responsive behavior is structural: panels stack or hide at declared width thresholds while the primary action remains reachable.
 
-Settings use four native categories—Model, Style, Prompts, Advanced—with vertical scrolling only. Expert JSON and experimental controls remain progressively disclosed or isolated from everyday configuration.
+Settings is a destination in the content column, reached from the navigation column footer or ⌘,. It keeps four categories—Model, Style, Prompts, Advanced—with vertical scrolling only. Expert JSON and experimental controls remain progressively disclosed or isolated from everyday configuration.
 
 ## Elevation & Depth
 
-The system is flat by default. Hierarchy comes from native surface differences, dividers, spacing, selection, and material used for functional chrome such as the Inspector or status bar. Cards do not combine a strong border and shadow, and cards are never nested merely to create hierarchy.
+The system is flat by default. Hierarchy comes from native surface differences, dividers, spacing, selection, and the darker ground used for functional chrome such as the navigation column or status bar. Selection is a raised neutral surface, never the accent color. Cards do not combine a strong border and shadow, and cards are never nested merely to create hierarchy.
 
 **The Structural Depth Rule.** A new surface must represent a distinct task, state, or ownership boundary; decoration alone does not earn a container.
 
@@ -89,7 +99,19 @@ Controls use the native form language. Custom editable controls use an 8-point c
 
 ### Operation Status Bar
 
-A shared bottom status surface is visible in every workspace and in Settings. It shows current textual status, a native progress indicator while work is active, and Cancel only when cancellation is actually supported. It does not infer success or failure from prose and never relies on color alone.
+A single status surface sits at the foot of the content column, below whichever destination is showing. It shows current textual status, a native progress indicator while work is active, and Cancel only when cancellation is actually supported. Its trailing side carries read-only measurements of the open draft—word count and latest diagnosis score—which is where information too small to earn a destination belongs. It does not infer success or failure from prose and never relies on color alone.
+
+### Navigation Row
+
+One row shape serves every navigation destination: optional symbol, title, and a trailing count or attention badge. Counts are tertiary and monospaced. An attention badge is reserved for work awaiting the author's decision and is the only place red appears in navigation. Selection and hover are neutral raised surfaces.
+
+### Author Identity
+
+The navigation column footer names the author: avatar and pen name, with the running model on a second line beneath. The profile is local display only—no account, no server, no registration—and it never reaches prompts, bylines, or generated output. The avatar falls back to initials from the pen name. Making the profile influence writing is a separate decision and would need its own record of intent.
+
+### Screen Header
+
+Each content screen opens with a breadcrumb naming its group and title, followed by that screen's actions. A screen that replaces the article body must offer a return to it.
 
 ### Labeled Editor
 
@@ -104,7 +126,7 @@ A reusable labeled `TextEditor` supplies title, optional help, prose/code typogr
 
 ### Settings Navigation
 
-Settings use native tabs with labels and SF Symbols. Each tab has one page heading, a short purpose statement, grouped form sections, and one persistent status surface. Advanced model routing is closed by default.
+Settings uses a segmented category control in its screen header, with labels and SF Symbols. Each tab has one page heading, a short purpose statement, grouped form sections, and one persistent status surface. Advanced model routing is closed by default.
 
 ### Empty and Failure States
 
@@ -119,6 +141,7 @@ An empty state explains what is absent and provides the next valid action. An er
 - **Do** use system colors, fonts, focus rings, menus, dialogs, and keyboard conventions.
 - **Do** keep source provenance visible for generated or fallback content.
 - **Do** verify wide and narrow windows, light and dark appearances, keyboard order, VoiceOver labels, real Chinese copy, and long content.
+- **Do** take draft status color from `WorkshopPalette.statusColor` rather than re-deciding what "已发布" looks like.
 
 ### Don't:
 

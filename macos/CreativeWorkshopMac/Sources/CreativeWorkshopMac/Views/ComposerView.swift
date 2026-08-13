@@ -1,38 +1,34 @@
 import SwiftUI
 import CreativeWorkshopCore
 
+/// 「当前稿件」组里的三个视角：创作过程、正文、发布物料。
+///
+/// 24.13：这三个视角原本是本视图内部的一个分段 Picker，现在由左列导航直接选中，
+/// 所以 `selection` 是外部状态——本视图只负责渲染被选中的那一个，并在需要时跳转。
 struct ComposerView: View {
     @ObservedObject var store: WorkshopStore
-    @Binding var isInspectorVisible: Bool
-    @SceneStorage("selectedComposerTab") private var selectedComposerTab: ComposerTab = .process
+    @Binding var selection: WorkspaceDestination
     @SceneStorage("isFocusWritingMode") private var isFocusWritingMode = false
     @State private var isWeChatFormatterPresented = false
     private let articleStatuses = ["草稿", "已发布", "已归档"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            topActionBar
-            composerTabPicker
+        VStack(spacing: 0) {
+            WorkshopScreenHeader(group: "当前稿件", title: selection.title) {
+                topActionBar
+            }
+
             selectedComposerContent
+                .padding(.horizontal, WorkshopMetrics.sectionSpacing)
+                .padding(.top, WorkshopMetrics.stackSpacing)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            selectPreferredTabForCurrentDraft()
+            selectPreferredViewForCurrentDraft()
         }
         .onChange(of: store.selectedArticleID) { _ in
-            selectPreferredTabForCurrentDraft()
+            selectPreferredViewForCurrentDraft()
         }
-        .onChange(of: store.title) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.summary) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.content) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.outline) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.ideaInput) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.writingDirection) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.materials) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.articleStatus) { _ in store.scheduleAutosaveSnapshot() }
-        .onChange(of: store.pendingDraftReview?.draftVersionID) { _ in store.scheduleAutosaveSnapshot() }
         // 18.3.2 防空转：内容自上次诊断后未变化时，必须先提示后才允许发起新的模型调用。
         // 24.1 发布流程护栏：未经"已发布"直接归档会缺失终审与编辑量记录（北极星指标）。
         .confirmationDialog(
@@ -69,7 +65,7 @@ struct ComposerView: View {
         ) {
             Button("恢复草稿") {
                 store.restoreAutosavedDraft()
-                selectedComposerTab = .article
+                selection = .article
             }
             Button("丢弃", role: .destructive) {
                 store.discardAutosavedDraft()
@@ -87,28 +83,15 @@ struct ComposerView: View {
         }
     }
 
-    private var composerTabPicker: some View {
-        Picker("工作区视图", selection: $selectedComposerTab) {
-            ForEach(ComposerTab.allCases) { tab in
-                Label(tab.title, systemImage: tab.systemImage)
-                    .tag(tab)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 360)
-        .controlSize(.small)
-    }
-
     @ViewBuilder
     private var selectedComposerContent: some View {
-        switch selectedComposerTab {
-        case .process:
-            processSection
+        switch selection {
         case .article:
             articleEditorSection
         case .community:
             communitySection
+        default:
+            processSection
         }
     }
 
@@ -407,7 +390,7 @@ struct ComposerView: View {
             minHeight: 170
         ) {
             Button {
-                selectedComposerTab = .article
+                selection = .article
             } label: {
                 Label("进入编辑", systemImage: "doc.text")
             }
@@ -508,20 +491,8 @@ struct ComposerView: View {
 
     private var topActionBar: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Spacer(minLength: 0)
-                topActionsFull
-            }
-
-            HStack(alignment: .center, spacing: 12) {
-                Spacer(minLength: 0)
-                topActionsCompact
-            }
-
-            HStack {
-                Spacer(minLength: 0)
-                topActionsCompact
-            }
+            topActionsFull
+            topActionsCompact
         }
     }
 
@@ -570,13 +541,6 @@ struct ComposerView: View {
                 Label("保存", systemImage: "tray.and.arrow.down")
             }
             .disabled(store.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isLoading)
-
-            Button {
-                isInspectorVisible.toggle()
-            } label: {
-                Label(isInspectorVisible ? "隐藏上下文" : "显示上下文", systemImage: "sidebar.right")
-            }
-            .help(isInspectorVisible ? "隐藏右侧上下文" : "显示右侧上下文")
         }
         .controlSize(.small)
         .fixedSize(horizontal: true, vertical: false)
@@ -632,13 +596,6 @@ struct ComposerView: View {
                 Label("新稿", systemImage: "plus")
             }
             .help("新稿")
-
-            Button {
-                isInspectorVisible.toggle()
-            } label: {
-                Label(isInspectorVisible ? "隐藏上下文" : "显示上下文", systemImage: "sidebar.right")
-            }
-            .help(isInspectorVisible ? "隐藏右侧上下文" : "显示右侧上下文")
         }
         .labelStyle(.iconOnly)
         .controlSize(.small)
@@ -887,19 +844,18 @@ struct ComposerView: View {
             .layoutPriority(1)
             .overlay(.separator, in: RoundedRectangle(cornerRadius: 8).stroke(style: StrokeStyle(lineWidth: 0.5)))
         }
-        .onAppear {
-            isInspectorVisible = false
-        }
     }
 
-    private func selectPreferredTabForCurrentDraft() {
+    /// 打开一篇已有内容的稿件时直接落到正文；新稿回到创作过程。
+    /// 只在「当前稿件」的三个视角之间调整，不会把作者从诊断或工作区页面拽走。
+    private func selectPreferredViewForCurrentDraft() {
         if store.selectedArticleID == nil {
-            selectedComposerTab = .process
+            selection = .process
             return
         }
 
         if !store.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            selectedComposerTab = .article
+            selection = .article
         }
     }
 
@@ -991,8 +947,7 @@ struct ComposerView: View {
 
             Button {
                 isFocusWritingMode = true
-                selectedComposerTab = .article
-                isInspectorVisible = false
+                selection = .article
             } label: {
                 Label("专注", systemImage: "rectangle.expand.vertical")
             }
@@ -1174,36 +1129,6 @@ struct ComposerView: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
-    }
-}
-
-private enum ComposerTab: String, CaseIterable, Identifiable {
-    case process
-    case article
-    case community
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .process:
-            return "写作过程"
-        case .article:
-            return "文章编辑"
-        case .community:
-            return "社群发布"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .process:
-            return "sparkles"
-        case .article:
-            return "doc.text"
-        case .community:
-            return "megaphone"
-        }
     }
 }
 

@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import CreativeWorkshopMac
 @testable import CreativeWorkshopCore
 
@@ -16,6 +17,22 @@ final class WorkshopStoreTests: XCTestCase {
 
         XCTAssertNil(store.pendingDraftReview)
         XCTAssertTrue(store.agentRuns.isEmpty, "入口拒绝时不应产生任何 agent_runs 记录")
+    }
+
+    func testNewDraftRequiresConfirmationWhenCurrentDraftHasUnsavedChanges() throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        store.content = "不能静默丢失的正文"
+
+        store.newDraft()
+
+        XCTAssertEqual(store.content, "不能静默丢失的正文")
+        XCTAssertNotNil(store.pendingSessionSwitch)
+        XCTAssertTrue(store.statusText.contains("未保存修改"))
+
+        store.confirmPendingSessionSwitch()
+        XCTAssertEqual(store.content, "")
+        XCTAssertNil(store.pendingSessionSwitch)
     }
 
     /// PRD 23.6.5：任务 15 的核心状态流转——ask_author 暂停出现提问卡，续跑后（预算继承）
@@ -77,6 +94,67 @@ final class WorkshopStoreTests: XCTestCase {
         let pending = try XCTUnwrap(store.pendingDraftReview)
         XCTAssertEqual(pending.agentSessionSummary?.first, "共 0 步，停止原因：作者选择结束会话，交付当前最好版本")
         XCTAssertEqual(executor.callCounts["agent-decision-native"], callsBeforeFinish, "就此结束不应再消耗模型调用")
+    }
+
+    func testResumingPausedAgentCannotOverwriteContentEditedAfterPause() async throws {
+        let database = try makeDatabase()
+        let executor = DecisionScriptedExecutor()
+        executor.decisions = [
+            AgentDecisionResult(
+                action: "ask_author",
+                arguments: AgentDecisionArguments(query: "请补充素材"),
+                reason: "缺证据",
+                stop: false
+            )
+        ]
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.setAgentLabEnabled(true)
+        store.apiKeyInput = "fake-key"
+        store.ideaInput = "一个想法"
+        store.content = "暂停前正文"
+
+        await store.startAgentSession()
+        XCTAssertNotNil(store.agentSessionAskAuthor)
+
+        store.content = "作者在暂停后重写的正文"
+        executor.decisions = [
+            AgentDecisionResult(action: "finish", reason: "结束", stop: true)
+        ]
+        await store.resumeAgentSession()
+
+        XCTAssertEqual(store.content, "作者在暂停后重写的正文")
+        XCTAssertNil(store.pendingDraftReview, "旧代理状态不得覆盖暂停后的正文编辑")
+        XCTAssertNil(store.agentSessionAskAuthor, "冲突的暂停句柄应失效，避免反复误用")
+        XCTAssertTrue(store.statusText.contains("旧代理会话已安全丢弃"))
+    }
+
+    func testFinishingPausedAgentCannotOverwriteContentEditedAfterPause() async throws {
+        let database = try makeDatabase()
+        let executor = DecisionScriptedExecutor()
+        executor.decisions = [
+            AgentDecisionResult(
+                action: "ask_author",
+                arguments: AgentDecisionArguments(query: "请确认正文"),
+                reason: "需作者确认",
+                stop: false
+            )
+        ]
+        let store = try WorkshopStore(database: database, aiClient: executor)
+        store.setAgentLabEnabled(true)
+        store.apiKeyInput = "fake-key"
+        store.ideaInput = "一个想法"
+        store.content = "暂停前正文"
+
+        await store.startAgentSession()
+        XCTAssertNotNil(store.agentSessionAskAuthor)
+
+        store.content = "作者保留的新正文"
+        await store.finishAgentSessionNow()
+
+        XCTAssertEqual(store.content, "作者保留的新正文")
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertNil(store.agentSessionAskAuthor)
+        XCTAssertTrue(store.statusText.contains("旧代理结果已安全丢弃"))
     }
 
     /// PRD 23.8.1 验收标准 3：会话内 search_materials 命中的素材应能在交付的待复核卡片上看到（retrievedFragments）。
@@ -170,7 +248,8 @@ final class WorkshopStoreTests: XCTestCase {
             reviewStatus: "pending"
         )
         store.draftVersions = [version]
-        store.pendingDraftReview = PendingDraftReview(
+        store.applySnapshot(before)
+        try store.writingSession.stage(PendingDraftReview(
             draftVersionID: version.id,
             actionTitle: "测试待复核",
             articleID: nil,
@@ -184,7 +263,7 @@ final class WorkshopStoreTests: XCTestCase {
             retrievedFragments: nil,
             iterationSummary: nil,
             candidateJudgement: nil
-        )
+        ), expectedRevision: store.writingSession.state.revision)
 
         await store.confirmPendingDraftReview()
 
@@ -200,9 +279,9 @@ final class WorkshopStoreTests: XCTestCase {
             after: after,
             reviewStatus: "pending"
         )
-        store.content = after.content
+        store.applySnapshot(before)
         store.draftVersions = [discardVersion]
-        store.pendingDraftReview = PendingDraftReview(
+        try store.writingSession.stage(PendingDraftReview(
             draftVersionID: discardVersion.id,
             actionTitle: "测试放弃",
             articleID: nil,
@@ -216,13 +295,66 @@ final class WorkshopStoreTests: XCTestCase {
             retrievedFragments: nil,
             iterationSummary: nil,
             candidateJudgement: nil
-        )
+        ), expectedRevision: store.writingSession.state.revision)
 
         await store.discardPendingDraftReview()
 
         XCTAssertNil(store.pendingDraftReview)
         XCTAssertEqual(store.content, before.content)
         XCTAssertTrue(try database.listDraftVersions().allSatisfy { $0.id != discardVersion.id })
+    }
+
+    func testDiscardPersistenceFailureKeepsPendingPreviewAndDoesNotProjectSuccess() async throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let before = DraftSnapshot(title: "旧标题", summary: "旧摘要", content: "旧正文")
+        let after = DraftSnapshot(title: "候选标题", summary: "候选摘要", content: "候选正文")
+        store.applySnapshot(before)
+        let outcome = try store.writingWorkflow.execute(.deliverPending(.init(
+            articleID: nil,
+            titleSnapshot: "候选标题",
+            actionTitle: "故障注入",
+            before: before,
+            after: after,
+            usedFallback: false
+        )))
+        guard case let .pendingDelivered(version, pending) = outcome else {
+            return XCTFail("应先交付待复核版本")
+        }
+        try store.writingSession.stage(pending, expectedRevision: store.writingSession.state.revision)
+        store.draftVersions = [version]
+
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE draft_versions", nil, nil, nil), SQLITE_OK)
+
+        await store.discardPendingDraftReview()
+
+        XCTAssertEqual(store.pendingDraftReview?.draftVersionID, version.id)
+        XCTAssertEqual(store.content, after.content, "数据库失败时不得先回退正文")
+        XCTAssertFalse(store.statusText.contains("已放弃"), "失败不得投影为成功")
+    }
+
+    func testPolishRejectsLateCandidateAfterAuthorEditsDuringModelRun() async throws {
+        let database = try makeDatabase()
+        let ai = SlowFakeAIClient(delayNanoseconds: 80_000_000)
+        let store = try WorkshopStore(database: database, aiClient: ai)
+        store.title = "原标题"
+        store.content = "原正文"
+
+        let task = Task { await store.polishDraft(.natural) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        store.materials = "模型运行期间新增的素材"
+        await task.value
+
+        XCTAssertNil(store.pendingDraftReview)
+        XCTAssertEqual(store.content, "原正文")
+        XCTAssertEqual(store.materials, "模型运行期间新增的素材")
+        XCTAssertTrue(
+            try database.listDraftVersions().allSatisfy { $0.review_status != "pending" },
+            "陈旧结果被拒绝后，补偿清理不得留下孤儿 pending 行"
+        )
     }
 
     func testIssueRewriteRejectsApplyingWhenContentChanged() async throws {
@@ -962,16 +1094,17 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(store.publishFlowStageIndex, 0, "空稿 = 构思")
         store.content = "有正文了。"
         XCTAssertEqual(store.publishFlowStageIndex, 1, "有正文 = 初稿")
-        store.pendingDraftReview = PendingDraftReview(
+        let staged = PendingDraftReview(
             draftVersionID: 1, actionTitle: "测试", articleID: nil,
-            before: DraftSnapshot(title: "", summary: "", content: ""),
+            before: store.currentDraftSnapshot(),
             after: DraftSnapshot(title: "", summary: "", content: "x"),
             note: nil, usedFallback: false, selfCheck: nil, matchedPitfalls: [],
             agentTrace: nil, retrievedFragments: nil, sectionFragmentContexts: nil,
             iterationSummary: nil, candidateJudgement: nil
         )
+        try store.writingSession.stage(staged, expectedRevision: store.writingSession.state.revision)
         XCTAssertEqual(store.publishFlowStageIndex, 2, "存在待复核 = 待复核站")
-        store.pendingDraftReview = nil
+        try store.writingSession.didConfirmPendingDraftReview(versionID: staged.draftVersionID)
         store.articleStatus = "已发布"
         XCTAssertEqual(store.publishFlowStageIndex, 3)
         store.articleStatus = "已归档"
