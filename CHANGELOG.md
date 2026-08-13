@@ -21,6 +21,7 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Draft text location and workflow narration moved out of `WorkshopStore` into `DraftTextLocator` and `WorkflowNarration`, so the exact-match and truncation rules are independently testable.
 - Selection rewrite, writing advisor, and reader-perspective orchestration moved out of `WorkshopStore` into `WritingWorkflow` vertical slices. An empty rewrite replacement now fails before any run record is written, and advisor results commit with their run trace in one transaction.
 - Writing review, review-driven revision, deep revision, and publishing-asset orchestration also moved into `WritingWorkflow` slices. A review now commits with the exact snapshot it examined, so the anti-rerun check cannot drift; deep revision keeps every coordinator step in its run trace; and a failed asset write rolls its run trace back with it.
+- Outline generation moved into a `WritingWorkflow` slice that validates the writing session before writing anything, so a draft edited mid-generation no longer leaves an unusable outline in the run history. The outline Markdown renderer, previously duplicated verbatim across two targets and kept in sync by hand, now has one home in the core module.
 
 ### Fixed
 

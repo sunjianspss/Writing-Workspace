@@ -287,7 +287,7 @@ package struct WritingAgentCoordinator {
             if let generatedTitle = run.result.title, !generatedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 state.title = generatedTitle
             }
-            state.outline = run.result.renderedMarkdown
+            state.outline = run.result.markdown
             return ActionExecutionOutcome(
                 success: true,
                 error: "",
@@ -637,43 +637,6 @@ package struct WritingAgentCoordinator {
             .components(separatedBy: separators)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-    }
-}
-
-private extension OutlineResult {
-    /// 与 WorkshopStore 中 `OutlineResult.markdown` 的私有渲染逻辑保持一致（Core 无法引用 Mac target 的 private 扩展）。
-    var renderedMarkdown: String {
-        if let raw_output, !raw_output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return raw_output
-        }
-
-        var lines: [String] = []
-        if let title, !title.isEmpty {
-            lines.append("# \(title)")
-            lines.append("")
-        }
-        if let opening, !opening.isEmpty {
-            lines.append("## 开头")
-            lines.append(opening)
-            lines.append("")
-        }
-        for section in sections ?? [] {
-            if let heading = section.heading, !heading.isEmpty {
-                lines.append("## \(heading)")
-            }
-            for point in section.points ?? [] where !point.isEmpty {
-                lines.append("- \(point)")
-            }
-            if let hint = section.material_hint, !hint.isEmpty {
-                lines.append("素材位置：\(hint)")
-            }
-            lines.append("")
-        }
-        if let ending, !ending.isEmpty {
-            lines.append("## 结尾")
-            lines.append(ending)
-        }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

@@ -223,6 +223,30 @@ final class WritingWorkflowReviewTests: XCTestCase {
         XCTAssertFalse(outcome.usedFallback)
     }
 
+    /// 诊断落库失败时，运行轨迹必须随同一事务回滚——不能留下"有轨迹无诊断"的记录。
+    func testReviewFailureRollsBackTheRunTraceInTheSameTransaction() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: ReviewExecutor())
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE writing_reviews", nil, nil, nil), SQLITE_OK)
+
+        do {
+            _ = try await workflow.runWritingReview(
+                makeRequest(database: database, reviewedSnapshot: "正文")
+            )
+            XCTFail("诊断表缺失时必须抛错")
+        } catch {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(
+            try database.listAgentRuns(limit: 10).isEmpty,
+            "诊断写入失败时 AgentRun 必须随事务回滚"
+        )
+    }
+
     func testMissingExecutorLeavesNoReviewAndNoRun() async throws {
         let database = try makeDatabase()
         let workflow = WritingWorkflow(database: database)
@@ -739,6 +763,332 @@ private final class PublishAssetsExecutor: AIWorkflowExecuting {
             return AIRun(
                 result: result, elapsedMS: 4, success: true, error: "",
                 inputSummary: "物料输入", outputSummary: "物料输出"
+            )
+        }
+        return AIRun(
+            result: descriptor.fallback(), elapsedMS: 1, success: false,
+            error: "unexpected workflow", inputSummary: "", outputSummary: ""
+        )
+    }
+}
+
+/// 智能下一步纵切片（24.16）。此前这条切片完全没有测试。
+@MainActor
+final class WritingWorkflowAdvisorTests: XCTestCase {
+    func testAdvisorRunAndTraceCommitTogether() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: AdvisorExecutor())
+
+        let outcome = try await workflow.runWritingAdvisor(makeRequest(database: database))
+
+        XCTAssertEqual(try database.listAgentRuns(limit: 10).map(\.id), [outcome.agentRun.id])
+        XCTAssertEqual(try database.listWritingAdvisorRuns().map(\.id), [outcome.advisorRun.id])
+        XCTAssertEqual(outcome.advisorRun.next_action, "补第二段的来源")
+        XCTAssertFalse(outcome.usedFallback)
+    }
+
+    /// 判断结果落库失败时，运行轨迹必须随同一事务回滚。
+    func testAdvisorFailureRollsBackTheRunTraceInTheSameTransaction() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: AdvisorExecutor())
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE writing_advisor_runs", nil, nil, nil), SQLITE_OK)
+
+        do {
+            _ = try await workflow.runWritingAdvisor(makeRequest(database: database))
+            XCTFail("顾问表缺失时必须抛错")
+        } catch {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(
+            try database.listAgentRuns(limit: 10).isEmpty,
+            "判断结果写入失败时 AgentRun 必须随事务回滚"
+        )
+    }
+
+    /// 模型没给下一步时退回最大问题，运行记录不留空。
+    func testRunSummaryFallsBackToMainProblem() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: AdvisorExecutor(nextAction: nil, mainProblem: "证据太薄")
+        )
+
+        let outcome = try await workflow.runWritingAdvisor(makeRequest(database: database))
+
+        XCTAssertEqual(outcome.agentRun.summary, "证据太薄")
+    }
+
+    func testMissingExecutorWritesNothing() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+
+        do {
+            _ = try await workflow.runWritingAdvisor(makeRequest(database: database))
+            XCTFail("未配置 executor 必须抛错")
+        } catch WritingWorkflow.WorkflowError.missingExecutor {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
+        XCTAssertTrue(try database.listWritingAdvisorRuns().isEmpty)
+    }
+
+    private func makeDatabase() throws -> NativeDatabase {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "advisor-\(UUID().uuidString).sqlite3")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return try NativeDatabase(databaseURL: url)
+    }
+
+    private func makeRequest(database: NativeDatabase) throws -> WritingWorkflow.AnalysisRequest {
+        let style = try database.defaultStyle()
+        return .init(
+            articleID: nil,
+            titleSnapshot: "测试稿",
+            context: ContextPackage(
+                stage: "判断",
+                title: "测试稿",
+                summary: "",
+                idea: "一个想法",
+                direction: "随笔",
+                outline_excerpt: "",
+                content_excerpt: "正文",
+                materials_excerpt: "",
+                selected_topic_title: nil,
+                selected_topic_summary: nil,
+                style_name: style.name,
+                style_brief: "",
+                word_count: 2,
+                paragraph_count: 1,
+                material_count: 0,
+                recent_article_titles: [],
+                recent_training_focus: [],
+                recent_issues: [],
+                genre: style.genre,
+                known_pitfalls: []
+            ),
+            style: style,
+            template: nil,
+            config: ModelConfig(model: "test-model"),
+            apiKey: "fake-key"
+        )
+    }
+}
+
+private final class AdvisorExecutor: AIWorkflowExecuting {
+    private let nextAction: String?
+    private let mainProblem: String?
+
+    init(nextAction: String? = "补第二段的来源", mainProblem: String? = "证据不足") {
+        self.nextAction = nextAction
+        self.mainProblem = mainProblem
+    }
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        if let result = WritingAdvisorResult(
+            stage: "修订",
+            main_problem: mainProblem,
+            next_action: nextAction,
+            reason: "全文唯一的量化证据没有出处",
+            suggested_actions: ["定点改写"],
+            focus_area: "证据"
+        ) as? Output {
+            return AIRun(
+                result: result, elapsedMS: 3, success: true, error: "",
+                inputSummary: "判断输入", outputSummary: "判断输出"
+            )
+        }
+        return AIRun(
+            result: descriptor.fallback(), elapsedMS: 1, success: false,
+            error: "unexpected workflow", inputSummary: "", outputSummary: ""
+        )
+    }
+}
+
+/// 生成大纲纵切片（24.17），以及从两处私有扩展收拢的大纲渲染。
+@MainActor
+final class WritingWorkflowOutlineTests: XCTestCase {
+    func testOutlineRecordsRunAndReturnsResult() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: OutlineExecutor())
+
+        let outcome = try await workflow.generateOutline(
+            makeRequest(database: database),
+            validateBeforeCommit: {}
+        )
+
+        XCTAssertEqual(outcome.result.title, "大纲标题")
+        XCTAssertEqual(try database.listAgentRuns(limit: 10).map(\.id), [outcome.agentRun.id])
+        XCTAssertEqual(outcome.agentRun.summary, "大纲标题")
+    }
+
+    /// 生成期间作者动过稿件：整次作废，不留下没人用得上的运行轨迹。
+    func testStaleSessionFailsBeforeWritingAnyRun() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: OutlineExecutor())
+
+        do {
+            _ = try await workflow.generateOutline(
+                makeRequest(database: database),
+                validateBeforeCommit: { throw OutlineTestFailure.staleSession }
+            )
+            XCTFail("会话过期必须在落库前失败")
+        } catch OutlineTestFailure.staleSession {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
+    }
+
+    func testMissingExecutorWritesNoRun() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+
+        do {
+            _ = try await workflow.generateOutline(
+                makeRequest(database: database),
+                validateBeforeCommit: {}
+            )
+            XCTFail("未配置 executor 必须抛错")
+        } catch WritingWorkflow.WorkflowError.missingExecutor {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
+    }
+
+    /// 渲染规则此前在 WorkshopStore 与 WritingAgentCoordinator 各有一份逐字相同的副本。
+    func testMarkdownAssemblesStructuredOutline() {
+        let result = OutlineResult(
+            title: "为什么把 L2 留在实验室",
+            opening: "先讲那次运行。",
+            sections: [
+                OutlineSection(
+                    heading: "证据不足",
+                    points: ["分数区间", "样本量"],
+                    material_hint: "评测报告"
+                )
+            ],
+            ending: "收在判断标准上。",
+            raw_output: nil
+        )
+
+        XCTAssertEqual(
+            result.markdown,
+            """
+            # 为什么把 L2 留在实验室
+
+            ## 开头
+            先讲那次运行。
+
+            ## 证据不足
+            - 分数区间
+            - 样本量
+            素材位置：评测报告
+
+            ## 结尾
+            收在判断标准上。
+            """
+        )
+    }
+
+    /// 模型给了原始输出就直接用，不再按结构拼装。
+    func testMarkdownPrefersRawOutputWhenPresent() {
+        let result = OutlineResult(
+            title: "会被忽略的标题",
+            opening: nil,
+            sections: nil,
+            ending: nil,
+            raw_output: "模型直接给的大纲原文"
+        )
+
+        XCTAssertEqual(result.markdown, "模型直接给的大纲原文")
+    }
+
+    private func makeDatabase() throws -> NativeDatabase {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "outline-\(UUID().uuidString).sqlite3")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return try NativeDatabase(databaseURL: url)
+    }
+
+    private func makeRequest(database: NativeDatabase) throws -> WritingWorkflow.OutlineRequest {
+        let style = try database.defaultStyle()
+        return .init(
+            analysis: .init(
+                articleID: nil,
+                titleSnapshot: "测试稿",
+                context: ContextPackage(
+                    stage: "大纲",
+                    title: "测试稿",
+                    summary: "",
+                    idea: "一个想法",
+                    direction: "随笔",
+                    outline_excerpt: "",
+                    content_excerpt: "",
+                    materials_excerpt: "",
+                    selected_topic_title: nil,
+                    selected_topic_summary: nil,
+                    style_name: style.name,
+                    style_brief: "",
+                    word_count: 0,
+                    paragraph_count: 0,
+                    material_count: 0,
+                    recent_article_titles: [],
+                    recent_training_focus: [],
+                    recent_issues: [],
+                    genre: style.genre,
+                    known_pitfalls: []
+                ),
+                style: style,
+                template: nil,
+                config: ModelConfig(model: "test-model"),
+                apiKey: "fake-key"
+            ),
+            topic: TopicPayload(
+                title: "测试选题",
+                direction: "随笔",
+                core_viewpoint: nil,
+                target_reader: nil,
+                description: nil,
+                angle: nil,
+                emotion: nil,
+                score: 3,
+                status: "待写",
+                tags: ["随笔"]
+            )
+        )
+    }
+}
+
+private enum OutlineTestFailure: Error {
+    case staleSession
+}
+
+private final class OutlineExecutor: AIWorkflowExecuting {
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        if let result = OutlineResult(
+            title: "大纲标题",
+            opening: "开头",
+            sections: nil,
+            ending: nil,
+            raw_output: nil
+        ) as? Output {
+            return AIRun(
+                result: result, elapsedMS: 3, success: true, error: "",
+                inputSummary: "大纲输入", outputSummary: "大纲输出"
             )
         }
         return AIRun(

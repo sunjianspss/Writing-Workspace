@@ -1,9 +1,12 @@
 import Foundation
 
-/// 把工作流结果翻译成写进数据库的人类可读说明与可复盘轨迹（24.15 从 `WorkshopStore` 抽出）。
+/// 把工作流结果翻译成人类可读文本的纯映射（24.15 从 `WorkshopStore` 抽出）。
 ///
-/// 这些是纯映射：同样的响应必须产出同样的说明。留在 Store 里时它们只能连着
-/// `@MainActor` 的整个对象才测得到，而截断规则（只取前 N 条）本身是会出错的逻辑。
+/// 两类去处：运行记录里的说明与可复盘轨迹（进数据库），以及大纲的 Markdown
+/// 渲染（进编辑器，见文件末尾的 `OutlineResult` 扩展）。
+///
+/// 同样的输入必须产出同样的文本。留在 Store 里时它们只能连着 `@MainActor` 的
+/// 整个对象才测得到，而截断规则（只取前 N 条）和渲染拼装本身都是会出错的逻辑。
 package enum WorkflowNarration {
     /// 代理初稿的过程说明。空字段整条略去，不留「未返回」占位。
     package static func agentDraftNote(_ response: AgentDraftResponse) -> String {
@@ -103,5 +106,47 @@ package extension TopicPayload {
             status: "待写",
             tags: [direction]
         )
+    }
+}
+
+package extension OutlineResult {
+    /// 结构化大纲渲染成编辑器里的 Markdown（24.17 从两处私有扩展收拢）。
+    ///
+    /// 此前 `WorkshopStore` 和 `WritingAgentCoordinator` 各有一份逐字相同的实现，
+    /// 靠注释提醒人工同步。渲染规则是领域逻辑，不该按 target 复制。
+    ///
+    /// 模型给了原始输出就直接用；否则按"标题→开头→各段（含素材位置）→结尾"拼装。
+    var markdown: String {
+        if let raw_output, !raw_output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return raw_output
+        }
+
+        var lines: [String] = []
+        if let title, !title.isEmpty {
+            lines.append("# \(title)")
+            lines.append("")
+        }
+        if let opening, !opening.isEmpty {
+            lines.append("## 开头")
+            lines.append(opening)
+            lines.append("")
+        }
+        for section in sections ?? [] {
+            if let heading = section.heading, !heading.isEmpty {
+                lines.append("## \(heading)")
+            }
+            for point in section.points ?? [] where !point.isEmpty {
+                lines.append("- \(point)")
+            }
+            if let hint = section.material_hint, !hint.isEmpty {
+                lines.append("素材位置：\(hint)")
+            }
+            lines.append("")
+        }
+        if let ending, !ending.isEmpty {
+            lines.append("## 结尾")
+            lines.append(ending)
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

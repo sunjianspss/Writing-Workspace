@@ -344,6 +344,23 @@ package struct WritingWorkflow {
         }
     }
 
+    package struct OutlineRequest {
+        package var analysis: AnalysisRequest
+        package var topic: TopicPayload
+
+        package init(analysis: AnalysisRequest, topic: TopicPayload) {
+            self.analysis = analysis
+            self.topic = topic
+        }
+    }
+
+    package struct OutlineOutcome {
+        package var agentRun: AgentRun
+        package var result: OutlineResult
+        package var usedFallback: Bool
+        package var error: String
+    }
+
     package struct PublishAssetsOutcome {
         package var agentRun: AgentRun
         /// 已落库的物料记录。摘要与标签直接取自它，调用方不需要另一份原始结果。
@@ -648,6 +665,46 @@ package struct WritingWorkflow {
                 error: run.error
             )
         }
+    }
+
+    /// 生成大纲：产出大纲与运行轨迹。
+    ///
+    /// `validateBeforeCommit` 在**任何数据库写入之前**运行。生成期间作者可能已经
+    /// 改了稿件，这时整次生成必须作废——留下一条运行记录会让轨迹里出现一次
+    /// 谁也没用上的大纲。语义与 `polish` 的同名参数一致。
+    package func generateOutline(
+        _ request: OutlineRequest,
+        onPartialOutput: (@Sendable (String) -> Void)? = nil,
+        validateBeforeCommit: () throws -> Void
+    ) async throws -> OutlineOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<OutlineResult> = await executor.execute(
+            NativeWorkflowCatalog.outline(
+                topic: request.topic,
+                context: request.analysis.context,
+                style: request.analysis.style,
+                template: request.analysis.template
+            ),
+            config: request.analysis.config,
+            apiKey: request.analysis.apiKey,
+            onPartialOutput: onPartialOutput
+        )
+        try Task.checkCancellation()
+        try validateBeforeCommit()
+
+        let agentRun = try recordSingleStepRun(
+            actionTitle: "生成大纲",
+            summary: run.result.title ?? "完成文章大纲。",
+            request: request.analysis,
+            run: run
+        )
+        return OutlineOutcome(
+            agentRun: agentRun,
+            result: run.result,
+            usedFallback: !run.success,
+            error: run.error
+        )
     }
 
     /// 发布物料：物料记录与运行轨迹在同一事务里落库。
