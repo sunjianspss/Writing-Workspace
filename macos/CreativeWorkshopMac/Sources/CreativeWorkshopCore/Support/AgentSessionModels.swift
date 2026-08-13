@@ -272,10 +272,18 @@ package struct AgentAskAuthorPrompt: Identifiable {
     package var questions: [String]
     package var resumeState: AgentSessionState
     package var before: DraftSnapshot
+    /// 暂停发生时的文章身份。续跑可接受素材/方向补充，但不能跨文章复用旧代理状态。
+    package var articleID: Int?
 
-    package init(questions: [String], resumeState: AgentSessionState, before: DraftSnapshot) {
+    package init(
+        questions: [String],
+        resumeState: AgentSessionState,
+        before: DraftSnapshot,
+        articleID: Int?
+    ) {
         self.questions = questions
         self.resumeState = resumeState
         self.before = before
+        self.articleID = articleID
     }
 }

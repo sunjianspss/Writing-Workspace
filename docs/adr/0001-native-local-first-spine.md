@@ -1,6 +1,6 @@
 # ADR-0001: Native local-first application spine and authority boundaries
 
-Status: Accepted; recovery controls partially implemented
+Status: Accepted; recovery controls implemented
 
 Date: 2026-08-12
 
@@ -19,9 +19,9 @@ The SwiftUI macOS application is the only product runtime. It uses a local-first
 
 | Fact or surface | Authority / role | Writers and admission | What it does not own |
 | --- | --- | --- | --- |
-| Articles, topics, materials, styles, prompts, reviews, versions, publishing records | Product SQLite database | `NativeDatabase` through native workflow/store entry paths | Unsaved edits, credentials, rendering preferences, evaluation evidence |
-| Current unsaved writing session | In-memory `WorkshopStore` projection | Native UI actions and workflow results | Committed article history |
-| Autosave snapshot | `AutosaveController` recovery copy in UserDefaults | Debounced native session snapshot | Accepted article truth; it may be restored or discarded |
+| Articles, topics, materials, styles, prompts, reviews, versions, publishing records | Product SQLite database | `NativeDatabase`; the article/version/pending seam writes through `WritingWorkflow`, while remaining legacy Store writers migrate incrementally | Unsaved edits, credentials, rendering preferences, evaluation evidence |
+| Current unsaved writing session | In-memory `WritingSession` | Author edits plus DB-success outcomes from `WritingWorkflow`; `WorkshopStore` only projects it | Committed article history |
+| Autosave snapshot | `WritingSession` through `AutosaveController`, as a recovery copy in UserDefaults | Debounced session transitions, without View-level scheduling | Accepted article truth; it may be restored or discarded |
 | API credential | macOS Keychain | Settings through `KeychainCredentialStore` | Model configuration or article data |
 | AI output | Candidate result with recorded provenance | Declared workflow descriptors through `WorkflowEngine` | Final editorial truth before review/acceptance/save |
 | WeChat preview/export | Bundled, non-persistent WebKit rendering projection | Current title, summary, body, and presentation preferences | Article persistence or a second editable draft |
@@ -72,13 +72,15 @@ The retired Web/FastAPI/Next/Python runtime has no compatibility entry point. A 
 
 ### Database initialization or migration failure
 
-- Current behavior: initialization fails and prevents normal app startup.
-- Required terminal invariant: the pre-migration database remains recoverable and schema version advances only after the transition completes.
-- Open control: versioned transactional migrations, migration backup, and a tested restore path are not yet fully implemented. A future migration change is not closed until those controls and a deliberately failing migration test exist.
+- Current behavior: an existing database is snapshotted before an upgrade; migrations run in one immediate transaction and advance `user_version` only inside that transaction. A failed transition rolls back and restores the open connection from the verified pre-migration backup before startup reports the error.
+- Terminal invariant: the pre-migration database remains recoverable and schema version advances only after the transition completes.
+- Evidence: version 10 → 11 backup/restore tests, a deliberately incompatible migration-history table, and the public manual restore entry point. Future schema changes must append an enumerated migration and preserve the same failure test pattern.
 
 ## Guards
 
 - `script/architecture_guard.sh` rejects direct model-runner access from Views and enforces workflow descriptor entry paths.
+- The same guard rejects direct `saveArticle`, `saveDraftVersion`, `PendingReviewMachine`, or migrated `polishDraft` orchestration from `WorkshopStore*`; those operations belong to `WritingWorkflow`.
+- `script/test_architecture_guard.sh` proves the guard passes a clean fixture and rejects an injected Store persistence violation.
 - `script/verify.sh` is the supported local and CI gate for architecture guards plus XCTest.
 - Package dependency direction is `CreativeWorkshopMac` / `CreativeWorkshopEval` → `CreativeWorkshopCore`; the evaluation executable does not own product runtime state.
 - Web runtime directories and package-manager entry points remain retired.
@@ -87,7 +89,7 @@ Each new guard must demonstrate that it detects a known or safely planted violat
 
 ## Consequences
 
-- Native behavior has one executable path and one committed-data authority.
+- Native behavior has one executable path and one committed-data authority. `WorkshopStore` remains a transitional hybrid for workflows not yet moved behind `WritingWorkflow`; the new boundary is a shrink-only ratchet, not a claim that every mutation has migrated.
 - Renderers, autosave, and evaluation can evolve without becoming peer writers of product truth.
 - The author retains editorial decision authority even as workflows become more capable.
-- Distribution, migration recovery, and product-wide accessibility still require dedicated implementation slices; this ADR defines their terminal invariants but does not claim they are complete.
+- Distribution and product-wide accessibility still require dedicated implementation slices. Migration recovery and the first WritingSession/WritingWorkflow authority cutover are implemented; additional workflow actions may move behind the same command boundary incrementally.

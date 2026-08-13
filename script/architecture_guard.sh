@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${ARCHITECTURE_GUARD_ROOT:-}" ]]; then
+  ROOT_DIR="$(cd "$ARCHITECTURE_GUARD_ROOT" && pwd)"
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 PACKAGE_DIR="$ROOT_DIR/macos/CreativeWorkshopMac"
 SRC_DIR="$PACKAGE_DIR/Sources/CreativeWorkshopMac"
 CORE_DIR="$PACKAGE_DIR/Sources/CreativeWorkshopCore"
@@ -38,6 +42,22 @@ store_ai_record_hits="$(grep -n 'database\.recordAICall' "$STORE_FILE" 2>/dev/nu
 if [[ -n "$store_ai_record_hits" ]]; then
   echo "ERROR: Store must not hand-write ai_calls records; workflow descriptors should record through WorkflowEngine." >&2
   echo "$store_ai_record_hits" >&2
+  fail=1
+fi
+
+# WorkshopStore 只负责装配与 UI 投影。以下已经迁移到 WritingSession/WritingWorkflow
+# 的写入入口不允许回流；其余尚未迁移的路径暂不纳入，避免把守卫变成一次性大爆炸。
+store_boundary_hits=""
+while IFS= read -r file; do
+  hits="$(grep -nE 'database[[:space:]]*\.[[:space:]]*(saveArticle|saveDraftVersion)[[:space:]]*\(|PendingReviewMachine[[:space:]]*\(|NativeWorkflowCatalog[[:space:]]*\.[[:space:]]*polishDraft[[:space:]]*\(' "$file" 2>/dev/null || true)"
+  if [[ -n "$hits" ]]; then
+    store_boundary_hits+="${file}:"$'\n'"${hits}"$'\n'
+  fi
+done < <(find "$SRC_DIR/Stores" -type f -name 'WorkshopStore*.swift' 2>/dev/null | sort)
+
+if [[ -n "$store_boundary_hits" ]]; then
+  echo "ERROR: WorkshopStore boundary violation: direct persistence or business-machine writes must go through WritingSession/WritingWorkflow." >&2
+  echo "$store_boundary_hits" >&2
   fail=1
 fi
 

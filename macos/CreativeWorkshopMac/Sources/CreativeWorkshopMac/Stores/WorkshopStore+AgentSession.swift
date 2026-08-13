@@ -28,13 +28,23 @@ extension WorkshopStore {
     /// 续跑此前因 ask_author 暂停的会话：预算与 askAuthorUsed 均继承自暂停时的状态快照。
     func resumeAgentSession() async {
         guard let prompt = agentSessionAskAuthor else { return }
+        guard let checkpoint = checkpointForAgentPrompt(prompt) else {
+            agentSessionAskAuthor = nil
+            statusText = "暂停后正文或文章已经变化，旧代理会话已安全丢弃，请重新开始"
+            return
+        }
         agentSessionAskAuthor = nil
-        await runAgentSession(resuming: prompt)
+        await runAgentSession(resuming: prompt, checkpoint: checkpoint)
     }
 
     /// 作者在「代理提问」卡选择"就此结束"：不再消耗模型调用，直接按 finish 语义交付暂停时的最好版本。
     func finishAgentSessionNow() async {
         guard let prompt = agentSessionAskAuthor else { return }
+        guard let checkpoint = checkpointForAgentPrompt(prompt) else {
+            agentSessionAskAuthor = nil
+            statusText = "暂停后正文或文章已经变化，旧代理结果已安全丢弃，请重新开始"
+            return
+        }
         agentSessionAskAuthor = nil
         await run("代理会话", cancellable: false) {
             let session = AgentSessionResult(
@@ -45,12 +55,16 @@ extension WorkshopStore {
                 before: prompt.before,
                 elapsed_ms: 0
             )
-            try await self.deliverAgentSession(session)
+            try await self.deliverAgentSession(session, checkpoint: checkpoint)
         }
     }
 
-    private func runAgentSession(resuming prompt: AgentAskAuthorPrompt?) async {
+    private func runAgentSession(
+        resuming prompt: AgentAskAuthorPrompt?,
+        checkpoint suppliedCheckpoint: WritingSessionCheckpoint? = nil
+    ) async {
         await run("代理会话", cancellable: true) {
+            let checkpoint = suppliedCheckpoint ?? self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let input = WritingAgentSessionInput(
                 idea: self.ideaInput,
@@ -79,12 +93,15 @@ extension WorkshopStore {
                 session = await coordinator.run(input: input, onStep: self.agentSessionStepCallback())
             }
             try Task.checkCancellation()
-            try await self.deliverAgentSession(session)
+            try await self.deliverAgentSession(session, checkpoint: checkpoint)
         }
     }
 
     /// 会话交付：既服务新会话/续跑的正常收尾，也服务"就此结束"的直接交付，两条路径共用同一段落（18.4.1 待复核状态机）。
-    private func deliverAgentSession(_ session: AgentSessionResult) async throws {
+    private func deliverAgentSession(
+        _ session: AgentSessionResult,
+        checkpoint: WritingSessionCheckpoint? = nil
+    ) async throws {
         try self.recordAgentRun(
             runType: "有界代理循环",
             status: (session.stopReason == .finished || session.stopReason == .authorEnded || session.isAskAuthor) ? "success" : "fallback",
@@ -101,7 +118,8 @@ extension WorkshopStore {
             self.agentSessionAskAuthor = AgentAskAuthorPrompt(
                 questions: session.askAuthorQuestions ?? [],
                 resumeState: session.finalState,
-                before: session.before
+                before: session.before,
+                articleID: checkpoint?.articleID ?? self.selectedArticleID
             )
             self.statusText = "代理会话需要你补充信息"
             return
@@ -115,9 +133,23 @@ extension WorkshopStore {
             failureNote: session.stopReason.summaryText,
             usedFallback: false,
             clearArticleSelection: false,
-            retrievedFragments: session.finalState.retrievedFragments
+            retrievedFragments: session.finalState.retrievedFragments,
+            checkpoint: checkpoint
         )
-        self.pendingDraftReview?.agentSessionSummary = session.sessionSummaryLines
+        if let versionID = self.pendingDraftReview?.draftVersionID {
+            try self.writingSession.updatePendingDraftReview(versionID: versionID) {
+                $0.agentSessionSummary = session.sessionSummaryLines
+            }
+        }
+    }
+
+    /// ask_author 允许作者补充素材或写作方向，但不允许旧代理状态跨正文/文章边界回写。
+    private func checkpointForAgentPrompt(_ prompt: AgentAskAuthorPrompt) -> WritingSessionCheckpoint? {
+        guard selectedArticleID == prompt.articleID,
+              currentDraftSnapshot() == prompt.before else {
+            return nil
+        }
+        return captureWritingSessionCheckpoint()
     }
 
     /// 执行中流式状态："第 N 步 · 动作名"，沿用既有状态条与取消机制（PRD 23.6.5）。

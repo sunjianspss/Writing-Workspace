@@ -7,33 +7,30 @@ struct MaterialsView: View {
     private let materialTypes = ["全部", "灵感", "金句", "文章片段"]
 
     var body: some View {
-        HSplitView {
-            materialList
-                .frame(minWidth: 260, idealWidth: 320)
-
-            materialEditor
-                .frame(minWidth: 360)
-        }
-    }
-
-    private var materialList: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("素材箱")
-                        .font(.title2.bold())
-                    Text("把零散想法先存下来，写作时再带入画布。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
+        VStack(spacing: 0) {
+            WorkshopScreenHeader(group: "工作区", title: "素材箱") {
                 Button {
                     store.newMaterial()
                 } label: {
                     Label("新素材", systemImage: "plus")
                 }
+                .buttonStyle(.borderedProminent)
             }
 
+            // 列表与编辑器在右列内部左右分栏——两列结构下这是「列表 + 详情」的落法。
+            HSplitView {
+                materialList
+                    .frame(minWidth: 260, idealWidth: 320)
+
+                materialEditor
+                    .frame(minWidth: 360)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var materialList: some View {
+        VStack(alignment: .leading, spacing: 12) {
             TextField("搜索素材", text: $store.materialSearchText)
                 .textFieldStyle(.roundedBorder)
 

@@ -15,6 +15,7 @@ extension WorkshopStore {
         }
 
         await run("生成多版本候选", cancellable: true) {
+            let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let base = self.currentDraftSnapshot()
             let context = self.currentWritingContext(style: style)
@@ -27,14 +28,18 @@ extension WorkshopStore {
             let coordinator = CandidateSelectionCoordinator(
                 executor: self.aiClient,
                 saveVersion: { action, note, after in
-                    let version = try self.database.saveDraftVersion(
-                        articleID: self.selectedArticleID,
-                        titleSnapshot: self.titleIfAvailable(),
+                    try self.requireWritingSessionCheckpoint(checkpoint)
+                    let outcome = try self.writingWorkflow.execute(.recordDraftVersion(.init(
+                        articleID: checkpoint.articleID,
+                        titleSnapshot: checkpoint.titleSnapshot,
                         action: action,
                         note: note,
                         before: base,
                         after: after
-                    )
+                    )))
+                    guard case let .draftVersionRecorded(version) = outcome else {
+                        preconditionFailure("WritingWorkflow returned an invalid version outcome")
+                    }
                     createdSoFar.append(version)
                     self.draftVersions = createdSoFar + existingVersions
                     return version
@@ -63,6 +68,7 @@ extension WorkshopStore {
                     shuffleRNG: self.candidateShuffleRNG
                 )
             )
+            try self.requireWritingSessionCheckpoint(checkpoint)
             self.candidateShuffleRNG = output.shuffleRNG
 
             try self.recordAgentRun(
@@ -102,7 +108,8 @@ extension WorkshopStore {
                 clearArticleSelection: false,
                 retrievedFragments: output.retrievedFragments,
                 iterationSummary: output.deepOutput.iterations,
-                candidateJudgement: output.judgeResult
+                candidateJudgement: output.judgeResult,
+                checkpoint: checkpoint
             )
             self.statusText = "已生成 \(output.createdVersions.count) 个候选，候选 \(output.selectedCandidate.index) 已进入深度成稿，请确认或放弃"
         }

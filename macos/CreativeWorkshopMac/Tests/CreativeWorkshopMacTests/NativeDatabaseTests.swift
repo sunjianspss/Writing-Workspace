@@ -14,7 +14,128 @@ final class NativeDatabaseTests: XCTestCase {
         let stats = try database.overviewStats()
         XCTAssertEqual(stats.article_total, 0)
         XCTAssertEqual(stats.topic_total, 0)
-        XCTAssertEqual(try database.schemaVersion(), 10)
+        XCTAssertEqual(try database.schemaVersion(), 11)
+    }
+
+    func testVersionedMigrationCreatesBackupThatCanRestorePreMigrationData() throws {
+        let (databaseURL, articleID) = try makeVersion10Database(articleTitle: "迁移前标题")
+        let backupURL = NativeDatabase.migrationBackupURL(
+            for: databaseURL,
+            fromVersion: 10,
+            toVersion: 11
+        )
+
+        var migratedDatabase: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
+        XCTAssertEqual(try migratedDatabase?.schemaVersion(), 11)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+
+        _ = try migratedDatabase?.saveArticle(
+            id: articleID,
+            payload: ArticleSaveRequest(
+                title: "迁移后被修改",
+                content: "正文",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "情感文学"
+            )
+        )
+        migratedDatabase = nil
+
+        try NativeDatabase.restoreMigrationBackup(at: backupURL, to: databaseURL)
+
+        let restoredDatabase = try NativeDatabase(databaseURL: databaseURL)
+        XCTAssertEqual(try restoredDatabase.schemaVersion(), 11)
+        XCTAssertEqual(try restoredDatabase.listArticles().first?.title, "迁移前标题")
+    }
+
+    func testFailedVersionedMigrationRestoresVersion10SnapshotBeforeReportingFailure() throws {
+        let (databaseURL, _) = try makeVersion10Database(articleTitle: "失败前仍需保留")
+        try executeRawSQL(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);",
+            at: databaseURL
+        )
+
+        do {
+            _ = try NativeDatabase(databaseURL: databaseURL)
+            XCTFail("缺少 name/applied_at 的迁移历史表应让 v11 迁移失败")
+        } catch let NativeDatabaseError.migrationFailed(
+            fromVersion,
+            toVersion,
+            backupURL,
+            restored,
+            _
+        ) {
+            XCTAssertEqual(fromVersion, 10)
+            XCTAssertEqual(toVersion, 11)
+            XCTAssertTrue(restored)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+        }
+
+        // 故障输入本身属于迁移前快照，自动恢复后仍应存在。移除它，再次打开即可证明
+        // 失败尝试没有推进版本、删除文章或留下半迁移状态。
+        try executeRawSQL("DROP TABLE schema_migrations;", at: databaseURL)
+        let recoveredDatabase = try NativeDatabase(databaseURL: databaseURL)
+        XCTAssertEqual(try recoveredDatabase.schemaVersion(), 11)
+        XCTAssertEqual(try recoveredDatabase.listArticles().first?.title, "失败前仍需保留")
+    }
+
+    func testVersion10LegacyDatabaseNormalizesColumnsBeforeAdvancingToVersion11() throws {
+        let (databaseURL, _) = try makeVersion10Database(articleTitle: "真实旧库")
+        try executeRawSQL(
+            """
+            ALTER TABLE draft_versions RENAME TO draft_versions_modern;
+            CREATE TABLE draft_versions (
+                id INTEGER PRIMARY KEY,
+                article_id INTEGER,
+                title_snapshot TEXT,
+                action TEXT,
+                note TEXT,
+                before_title TEXT,
+                before_summary TEXT,
+                before_content TEXT,
+                after_title TEXT,
+                after_summary TEXT,
+                after_content TEXT,
+                created_at TEXT
+            );
+            DROP TABLE draft_versions_modern;
+            ALTER TABLE agent_runs RENAME TO agent_runs_modern;
+            CREATE TABLE agent_runs (
+                id INTEGER PRIMARY KEY,
+                article_id INTEGER,
+                title_snapshot TEXT,
+                run_type TEXT,
+                status TEXT,
+                summary TEXT,
+                model TEXT,
+                elapsed_ms INTEGER,
+                input_summary TEXT,
+                output_summary TEXT,
+                error TEXT,
+                created_at TEXT
+            );
+            DROP TABLE agent_runs_modern;
+            PRAGMA user_version = 10;
+            """,
+            at: databaseURL
+        )
+
+        let database = try NativeDatabase(databaseURL: databaseURL)
+
+        XCTAssertEqual(try database.schemaVersion(), 11)
+        let version = try database.saveDraftVersion(
+            articleID: nil,
+            titleSnapshot: "真实旧库",
+            action: "迁移验证",
+            note: nil,
+            before: DraftSnapshot(title: "旧", summary: "", content: "旧"),
+            after: DraftSnapshot(title: "新", summary: "", content: "新"),
+            reviewStatus: "pending"
+        )
+        XCTAssertEqual(version.review_status, "pending")
+        XCTAssertNoThrow(try database.listAgentRuns())
     }
 
     func testSaveArticleCreateTopicsAndStats() throws {
@@ -977,5 +1098,43 @@ final class NativeDatabaseTests: XCTestCase {
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return try NativeDatabase(databaseURL: directory.appending(path: "creative_workshop.sqlite3"))
+    }
+
+    private func makeVersion10Database(articleTitle: String) throws -> (URL, Int) {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let databaseURL = directory.appending(path: "creative_workshop.sqlite3")
+
+        var database: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
+        let article = try XCTUnwrap(database).saveArticle(
+            id: nil,
+            payload: ArticleSaveRequest(
+                title: articleTitle,
+                content: "正文",
+                summary: "摘要",
+                status: "草稿",
+                tags: [],
+                related_topic_id: nil,
+                genre: "情感文学"
+            )
+        )
+        database = nil
+
+        try executeRawSQL(
+            "DROP TABLE IF EXISTS schema_migrations; PRAGMA user_version = 10;",
+            at: databaseURL
+        )
+        return (databaseURL, article.id)
+    }
+
+    private func executeRawSQL(_ sql: String, at databaseURL: URL) throws {
+        var rawDatabase: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &rawDatabase) == SQLITE_OK else {
+            XCTFail("无法创建迁移测试数据库")
+            return
+        }
+        defer { sqlite3_close(rawDatabase) }
+        XCTAssertEqual(sqlite3_exec(rawDatabase, sql, nil, nil, nil), SQLITE_OK)
     }
 }

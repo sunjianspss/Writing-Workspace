@@ -2,46 +2,59 @@ import Foundation
 import SwiftUI
 import CreativeWorkshopCore
 
-private enum WorkshopSettingsTab: Hashable {
+private enum WorkshopSettingsTab: String, CaseIterable, Identifiable, Hashable {
     case model
     case style
     case prompts
     case advanced
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .model: "模型"
+        case .style: "风格"
+        case .prompts: "提示词"
+        case .advanced: "高级"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .model: "cpu"
+        case .style: "text.quote"
+        case .prompts: "text.bubble"
+        case .advanced: "slider.horizontal.3"
+        }
+    }
 }
 
+/// 24.14：设置从独立的偏好设置窗口搬进右列，成为左列底部的一个目的地。
+/// 四个分类保持不变，只是不再由 `TabView` 的窗口式工具栏承载——改用右列统一的
+/// 面包屑顶栏，和其他屏一致。状态栏由 `ContentView` 提供，这里不再自带一条。
 struct SettingsView: View {
     @ObservedObject var store: WorkshopStore
     @State private var selectedTab: WorkshopSettingsTab = .model
     @State private var isShowingClearAPIKeyConfirmation = false
+    @AppStorage("workshopAppearance") private var appearance = WorkshopAppearance.system.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
-            TabView(selection: $selectedTab) {
-                modelSettingsPage
-                    .tabItem { Label("模型", systemImage: "cpu") }
-                    .tag(WorkshopSettingsTab.model)
-
-                styleSettingsPage
-                    .tabItem { Label("风格", systemImage: "text.quote") }
-                    .tag(WorkshopSettingsTab.style)
-
-                promptSettingsPage
-                    .tabItem { Label("提示词", systemImage: "text.bubble") }
-                    .tag(WorkshopSettingsTab.prompts)
-
-                advancedSettingsPage
-                    .tabItem { Label("高级", systemImage: "slider.horizontal.3") }
-                    .tag(WorkshopSettingsTab.advanced)
+            WorkshopScreenHeader(group: "设置", title: selectedTab.title) {
+                Picker("设置分类", selection: $selectedTab) {
+                    ForEach(WorkshopSettingsTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.symbol)
+                            .tag(tab)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
             }
 
-            WorkshopOperationStatusBar(
-                text: store.statusText,
-                isRunning: store.isLoading,
-                canCancel: store.canCancelCurrentOperation,
-                onCancel: { store.cancelCurrentOperation() }
-            )
+            selectedSettingsPage
         }
-        .frame(minWidth: 760, idealWidth: 840, minHeight: 640, idealHeight: 720)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .confirmationDialog(
             "清除 API Key？",
             isPresented: $isShowingClearAPIKeyConfirmation,
@@ -53,6 +66,16 @@ struct SettingsView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("这会从钥匙串移除当前凭据。之后仍可重新填写并保存。")
+        }
+    }
+
+    @ViewBuilder
+    private var selectedSettingsPage: some View {
+        switch selectedTab {
+        case .model: modelSettingsPage
+        case .style: styleSettingsPage
+        case .prompts: promptSettingsPage
+        case .advanced: advancedSettingsPage
         }
     }
 
@@ -247,8 +270,22 @@ struct SettingsView: View {
     private var advancedSettingsPage: some View {
         settingsPage(
             title: "高级",
-            subtitle: "查看本地数据位置，并管理尚未进入稳定工作流的实验功能。"
+            subtitle: "外观、本地数据位置，以及尚未进入稳定工作流的实验功能。"
         ) {
+            Section("外观") {
+                Picker("界面外观", selection: $appearance) {
+                    ForEach(WorkshopAppearance.allCases) { option in
+                        Text(option.title).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("「跟随系统」随 macOS 的浅色/深色切换；选定浅色或深色则始终固定。左列底部也可以快速切换。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("本地数据") {
                 VStack(alignment: .leading, spacing: WorkshopMetrics.fieldSpacing) {
                     Text("数据库路径")

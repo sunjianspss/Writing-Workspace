@@ -1,71 +1,116 @@
 import SwiftUI
 import CreativeWorkshopCore
 
-struct InspectorView: View {
+// 24.13：这里原本是常驻右侧的 Inspector 窄栏，用一个四段 Picker 切换。两列工作台把
+// 它拆散——诊断类卡片归「诊断复核」，发布类归「发表前审核」，跨稿件统计归「资料库」。
+// 原「上下文」分段整段取消：运行后端与 SQLite 路径在设置里已有，字数与诊断分降级进状态栏，
+// 大纲与素材编辑器和「创作过程」屏重复。
+
+/// 「诊断复核」屏。两列结构下没有第三列可用，所以这一屏会把正文整个换走；
+/// 顶栏因此常驻一个「回到正文」的回程入口。
+struct DraftReviewView: View {
     @ObservedObject var store: WorkshopStore
-    @SceneStorage("selectedInspectorTab") private var selectedTab: InspectorTab = .context
+    @Binding var selection: WorkspaceDestination
 
     var body: some View {
         VStack(spacing: 0) {
-            inspectorTabHeader
+            WorkshopScreenHeader(group: "当前稿件", title: "诊断复核") {
+                HStack(spacing: WorkshopMetrics.controlSpacing) {
+                    Button {
+                        Task { await store.reviewCurrentDraft() }
+                    } label: {
+                        Label("重新诊断", systemImage: "text.magnifyingglass")
+                    }
+                    .disabled(!store.canRunWritingCoach)
 
-            Divider()
+                    Button {
+                        selection = .article
+                    } label: {
+                        Label("回到正文", systemImage: "doc.text")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    selectedContent
+                VStack(alignment: .leading, spacing: WorkshopMetrics.stackSpacing) {
+                    if store.pendingDraftReview != nil {
+                        PendingDraftReviewCard(store: store)
+                    }
+                    if store.pendingIssueRewrite != nil {
+                        PendingIssueRewriteCard(store: store)
+                    }
+                    AdvisorCard(store: store)
+                    AgentRunsCard(store: store)
+                    CoachCard(store: store)
+                    DimensionTrendsCard(store: store)
+                    ReaderPerspectiveCard(store: store)
                 }
-                .padding(12)
+                .frame(maxWidth: 1_060, alignment: .leading)
+                .padding(WorkshopMetrics.pagePadding)
             }
         }
-        .background(.regularMaterial)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+}
 
-    private var inspectorTabHeader: some View {
-        Picker("检查器", selection: $selectedTab) {
-            ForEach(InspectorTab.allCases) { tab in
-                Text(tab.title).tag(tab)
+/// 「发表前审核」屏：终审报告、编辑量与改稿版本。
+///
+/// 终审报告由发布流程（标记「已发布」）自动产出，没有独立的手动触发口，
+/// 所以顶栏只给回程——发布状态控件在「正文」屏。
+struct PrePublishView: View {
+    @ObservedObject var store: WorkshopStore
+    @Binding var selection: WorkspaceDestination
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkshopScreenHeader(group: "当前稿件", title: "发表前审核") {
+                Button {
+                    selection = .article
+                } label: {
+                    Label("回到正文", systemImage: "doc.text")
+                }
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: WorkshopMetrics.stackSpacing) {
+                    PrePublishAuditCard(store: store)
+                    EditMetricsCard(store: store)
+                    DraftVersionsCard(store: store)
+                }
+                .frame(maxWidth: 1_060, alignment: .leading)
+                .padding(WorkshopMetrics.pagePadding)
             }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 12)
-        // Keep the inspector tabs below the unified macOS titlebar; otherwise
-        // zoomed non-fullscreen windows can intercept clicks in this top strip.
-        .padding(.top, 34)
-        .padding(.bottom, 10)
-        .background(.regularMaterial)
-        .contentShape(Rectangle())
-        .zIndex(1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+}
 
-    @ViewBuilder
-    private var selectedContent: some View {
-        switch selectedTab {
-        case .context:
-            StatusCard(store: store)
-            DraftContextCard(store: store)
-        case .review:
-            if store.pendingDraftReview != nil {
-                PendingDraftReviewCard(store: store)
+/// 「资料库」屏：跨稿件的统计与选题储备，不跟着当前稿件走。
+struct LibraryView: View {
+    @ObservedObject var store: WorkshopStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkshopScreenHeader(group: "工作区", title: "资料库") {
+                Button {
+                    Task { await store.refreshAll() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .disabled(store.isLoading)
             }
-            if store.pendingIssueRewrite != nil {
-                PendingIssueRewriteCard(store: store)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: WorkshopMetrics.stackSpacing) {
+                    StatsCard(stats: store.stats)
+                    TopicsCard(store: store)
+                }
+                .frame(maxWidth: 1_060, alignment: .leading)
+                .padding(WorkshopMetrics.pagePadding)
             }
-            AdvisorCard(store: store)
-            AgentRunsCard(store: store)
-            CoachCard(store: store)
-            DimensionTrendsCard(store: store)
-            ReaderPerspectiveCard(store: store)
-        case .publish:
-            PrePublishAuditCard(store: store)
-            EditMetricsCard(store: store)
-            DraftVersionsCard(store: store)
-        case .library:
-            StatsCard(stats: store.stats)
-            TopicsCard(store: store)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -186,91 +231,6 @@ private struct EditMetricsCard: View {
 
     private func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
-    }
-}
-
-private enum InspectorTab: String, CaseIterable, Identifiable {
-    case context
-    case review
-    case publish
-    case library
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .context:
-            return "上下文"
-        case .review:
-            return "诊断"
-        case .publish:
-            return "发布"
-        case .library:
-            return "资料"
-        }
-    }
-}
-
-private struct DraftContextCard: View {
-    @ObservedObject var store: WorkshopStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("写作材料")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    Task { await store.generateOutline() }
-                } label: {
-                    Label("生成大纲", systemImage: "list.bullet.rectangle")
-                }
-                .controlSize(.small)
-                .disabled(store.isLoading)
-
-                Button {
-                    Task { await store.draftFromOutline() }
-                } label: {
-                    Label("成稿", systemImage: "square.and.pencil")
-                }
-                .controlSize(.small)
-                .disabled(store.outline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isLoading)
-            }
-
-            contextEditor(
-                title: "大纲",
-                text: $store.outline,
-                minHeight: 220,
-                help: "用于控制正文结构。生成、手改后都可以直接用来成稿。"
-            )
-
-            contextEditor(
-                title: "素材",
-                text: $store.materials,
-                minHeight: 160,
-                help: "放事实、例子、金句或原始笔记，AI 会在生成和诊断时参考。"
-            )
-        }
-        .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func contextEditor(title: String, text: Binding<String>, minHeight: CGFloat, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                Text(help)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            TextEditor(text: text)
-                .font(.callout)
-                .frame(minHeight: minHeight)
-                .overlay(.separator, in: RoundedRectangle(cornerRadius: 6).stroke(style: StrokeStyle(lineWidth: 0.5)))
-        }
     }
 }
 
@@ -415,32 +375,6 @@ private struct AdvisorCard: View {
                 }
             }
         }
-    }
-}
-
-private struct StatusCard: View {
-    @ObservedObject var store: WorkshopStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("运行上下文")
-                .font(.headline)
-
-            HStack {
-                Label(store.runtimeStatus?.backend ?? "native", systemImage: "checkmark.circle")
-                Spacer()
-                Text(store.runtimeStatus?.model ?? "未知模型")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-
-            Text("SQLite：\(store.databasePathText)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
-        .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

@@ -30,6 +30,61 @@ package final class NativeDatabase {
         try scalarInt("PRAGMA user_version")
     }
 
+    /// 把一个领域写入单元作为 SQLite 原子事务执行。调用者只有在 COMMIT 成功后才会拿到结果。
+    package func withTransaction<Value>(_ operation: () throws -> Value) throws -> Value {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let value = try operation()
+            try execute("COMMIT")
+            return value
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// 每个版本跃迁只保留一份确定路径的迁移前快照。重复尝试同一跃迁会先刷新该快照，
+    /// 因而不会无限堆积备份；成功后仍保留，直到下一次同版本跃迁覆盖它。
+    package static func migrationBackupURL(
+        for databaseURL: URL,
+        fromVersion: Int,
+        toVersion: Int
+    ) -> URL {
+        databaseURL
+            .deletingLastPathComponent()
+            .appending(
+                path: "\(databaseURL.lastPathComponent).pre-migration-v\(fromVersion)-to-v\(toVersion).backup"
+            )
+    }
+
+    /// 恢复入口要求没有存活的 `NativeDatabase` 连接指向目标文件。先验证备份可被 SQLite
+    /// 完整读取，再通过同目录临时文件原子替换，避免把半复制文件暴露成产品数据库。
+    package static func restoreMigrationBackup(at backupURL: URL, to databaseURL: URL) throws {
+        try validateSQLiteDatabase(at: backupURL)
+
+        let fileManager = FileManager.default
+        let temporaryURL = databaseURL
+            .deletingLastPathComponent()
+            .appending(path: ".\(databaseURL.lastPathComponent).restore-\(UUID().uuidString).tmp")
+        try fileManager.copyItem(at: backupURL, to: temporaryURL)
+        do {
+            if fileManager.fileExists(atPath: databaseURL.path) {
+                _ = try fileManager.replaceItemAt(databaseURL, withItemAt: temporaryURL)
+            } else {
+                try fileManager.moveItem(at: temporaryURL, to: databaseURL)
+            }
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = URL(fileURLWithPath: databaseURL.path + suffix)
+                if fileManager.fileExists(atPath: sidecar.path) {
+                    try fileManager.removeItem(at: sidecar)
+                }
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
     package func modelConfig() throws -> ModelConfig {
         ModelConfig(
             baseURL: try setting("model_base_url") ?? "https://api.deepseek.com",
@@ -959,9 +1014,34 @@ package final class NativeDatabase {
         return try getDraftVersion(id)
     }
 
+    package func confirmPendingDraftVersion(id: Int) throws -> DraftVersion {
+        try execute(
+            "UPDATE draft_versions SET review_status = 'confirmed' WHERE id = ? AND review_status = 'pending'",
+            [id]
+        )
+        guard sqlite3_changes(db) == 1 else {
+            throw NativeDatabaseError.invalidTransition(
+                "草稿版本 #\(id) 不存在或已不再处于 pending 状态"
+            )
+        }
+        return try getDraftVersion(id)
+    }
+
     /// 放弃一个从未落地为正文的"待复核"版本，直接从历史中移除，避免留下永远悬空的记录。
     package func deleteDraftVersion(id: Int) throws {
         try execute("DELETE FROM draft_versions WHERE id = ?", [id])
+    }
+
+    package func deletePendingDraftVersion(id: Int) throws {
+        try execute(
+            "DELETE FROM draft_versions WHERE id = ? AND review_status = 'pending'",
+            [id]
+        )
+        guard sqlite3_changes(db) == 1 else {
+            throw NativeDatabaseError.invalidTransition(
+                "草稿版本 #\(id) 不存在或已不再处于 pending 状态"
+            )
+        }
     }
 
     package func attachDraftVersionsToArticle(articleID: Int, titleSnapshot: String) throws {
@@ -1064,7 +1144,32 @@ package final class NativeDatabase {
     }
 
     private func initialize() throws {
-        try executeScript(
+        let initialVersion = try schemaVersion()
+        guard initialVersion <= nativeDatabaseSchemaVersion else {
+            throw NativeDatabaseError.unsupportedSchema(
+                found: initialVersion,
+                supported: nativeDatabaseSchemaVersion
+            )
+        }
+
+        let hasExistingSchema = try scalarInt(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ) > 0
+        let backupURL: URL? = hasExistingSchema && initialVersion < nativeDatabaseSchemaVersion
+            ? Self.migrationBackupURL(
+                for: databaseURL,
+                fromVersion: initialVersion,
+                toVersion: nativeDatabaseSchemaVersion
+            )
+            : nil
+        if let backupURL {
+            try createMigrationBackup(at: backupURL)
+        }
+
+        do {
+            try execute("BEGIN IMMEDIATE")
+            if initialVersion <= nativeDatabaseLegacyBaselineVersion {
+                try executeScript(
             """
             CREATE TABLE IF NOT EXISTS style_profiles (
                 id INTEGER PRIMARY KEY,
@@ -1302,11 +1407,33 @@ package final class NativeDatabase {
                 created_at TEXT
             );
             """
-        )
-        try ensureColumns()
-        try ensureSchemaVersion()
-        try seedDefaultsIfNeeded()
-        try seedPromptTemplatesIfNeeded()
+                )
+                try ensureColumns()
+            }
+            try applyVersionedMigrations(from: initialVersion)
+            try seedDefaultsIfNeeded()
+            try seedPromptTemplatesIfNeeded()
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            if let backupURL {
+                let restored: Bool
+                do {
+                    try restoreMigrationBackupIntoOpenConnection(from: backupURL)
+                    restored = true
+                } catch {
+                    restored = false
+                }
+                throw NativeDatabaseError.migrationFailed(
+                    from: initialVersion,
+                    to: nativeDatabaseSchemaVersion,
+                    backupURL: backupURL,
+                    restored: restored,
+                    message: error.localizedDescription
+                )
+            }
+            throw error
+        }
     }
 
     private func ensureColumns() throws {
@@ -1345,14 +1472,45 @@ package final class NativeDatabase {
         try ensureColumn(table: "agent_steps", name: "decision_json", definition: "TEXT")
     }
 
-    private func ensureSchemaVersion() throws {
-        let currentVersion = try schemaVersion()
-        guard currentVersion < nativeDatabaseSchemaVersion else {
-            try saveSetting(key: "database_schema_version", value: "\(currentVersion)")
-            return
+    private func applyVersionedMigrations(from initialVersion: Int) throws {
+        var appliedVersion = initialVersion
+
+        // 版本 1...10 出现在版本化迁移框架之前。旧库先在同一事务中经过完整建表/
+        // 补列兼容步骤，再认领为 v10；从 v11 起每个跃迁都有独立、可枚举的迁移。
+        if appliedVersion < nativeDatabaseLegacyBaselineVersion {
+            appliedVersion = nativeDatabaseLegacyBaselineVersion
+            try execute("PRAGMA user_version = \(appliedVersion)")
         }
-        try execute("PRAGMA user_version = \(nativeDatabaseSchemaVersion)")
-        try saveSetting(key: "database_schema_version", value: "\(nativeDatabaseSchemaVersion)")
+
+        let migrations: [(version: Int, name: String, apply: () throws -> Void)] = [
+            (
+                version: 11,
+                name: "建立版本化迁移历史",
+                apply: {
+                    try self.executeScript(
+                        """
+                        CREATE TABLE IF NOT EXISTS schema_migrations (
+                            version INTEGER PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            applied_at TEXT NOT NULL
+                        );
+                        """
+                    )
+                }
+            )
+        ]
+
+        for migration in migrations where migration.version > appliedVersion {
+            try migration.apply()
+            try execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                [migration.version, migration.name, utcNow()]
+            )
+            try execute("PRAGMA user_version = \(migration.version)")
+            appliedVersion = migration.version
+        }
+
+        try saveSetting(key: "database_schema_version", value: "\(appliedVersion)")
     }
 
     private func ensureColumn(table: String, name: String, definition: String) throws {
@@ -1439,6 +1597,15 @@ package final class NativeDatabase {
             throw NativeDatabaseError.notFound("article \(id)")
         }
         return article
+    }
+
+    /// 恢复自动保存时直接向权威数据库校验引用，不能依赖可能尚未刷新成功的 Store 列表投影。
+    package func articleExists(id: Int) throws -> Bool {
+        try scalarInt("SELECT EXISTS(SELECT 1 FROM articles WHERE id = ?)", [id]) == 1
+    }
+
+    package func topicExists(id: Int) throws -> Bool {
+        try scalarInt("SELECT EXISTS(SELECT 1 FROM topics WHERE id = ?)", [id]) == 1
     }
 
     private func getStyleProfile(_ id: Int) throws -> StyleProfile {
@@ -1901,9 +2068,77 @@ package final class NativeDatabase {
         }
         return "unknown SQLite error"
     }
+
+    private func createMigrationBackup(at backupURL: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: backupURL.path) {
+            try fileManager.removeItem(at: backupURL)
+        }
+
+        var backupDatabase: OpaquePointer?
+        guard sqlite3_open(backupURL.path, &backupDatabase) == SQLITE_OK else {
+            defer { sqlite3_close(backupDatabase) }
+            throw NativeDatabaseError.backup(message: "无法创建迁移备份：\(backupURL.path)")
+        }
+        defer { sqlite3_close(backupDatabase) }
+
+        guard let backup = sqlite3_backup_init(backupDatabase, "main", db, "main") else {
+            throw NativeDatabaseError.backup(message: "SQLite 无法初始化迁移备份")
+        }
+        let stepResult = sqlite3_backup_step(backup, -1)
+        let finishResult = sqlite3_backup_finish(backup)
+        guard stepResult == SQLITE_DONE, finishResult == SQLITE_OK else {
+            throw NativeDatabaseError.backup(message: "SQLite 迁移备份未完整写入")
+        }
+        try Self.validateSQLiteDatabase(at: backupURL)
+    }
+
+    private func restoreMigrationBackupIntoOpenConnection(from backupURL: URL) throws {
+        var backupDatabase: OpaquePointer?
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(backupURL.path, &backupDatabase, flags, nil) == SQLITE_OK else {
+            defer { sqlite3_close(backupDatabase) }
+            throw NativeDatabaseError.backup(message: "无法打开迁移前备份")
+        }
+        defer { sqlite3_close(backupDatabase) }
+
+        guard let restore = sqlite3_backup_init(db, "main", backupDatabase, "main") else {
+            throw NativeDatabaseError.backup(message: "SQLite 无法初始化自动恢复")
+        }
+        let stepResult = sqlite3_backup_step(restore, -1)
+        let finishResult = sqlite3_backup_finish(restore)
+        guard stepResult == SQLITE_DONE, finishResult == SQLITE_OK else {
+            throw NativeDatabaseError.backup(message: "SQLite 未能完整恢复迁移前快照")
+        }
+        guard try schemaVersion() < nativeDatabaseSchemaVersion else {
+            throw NativeDatabaseError.backup(message: "自动恢复后版本未回到迁移前状态")
+        }
+    }
+
+    private static func validateSQLiteDatabase(at databaseURL: URL) throws {
+        var database: OpaquePointer?
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+        guard sqlite3_open_v2(databaseURL.path, &database, flags, nil) == SQLITE_OK else {
+            defer { sqlite3_close(database) }
+            throw NativeDatabaseError.backup(message: "无法读取迁移备份：\(databaseURL.path)")
+        }
+        defer { sqlite3_close(database) }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA integrity_check", -1, &statement, nil) == SQLITE_OK else {
+            throw NativeDatabaseError.backup(message: "无法校验迁移备份")
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0),
+              String(cString: value) == "ok" else {
+            throw NativeDatabaseError.backup(message: "迁移备份完整性检查失败")
+        }
+    }
 }
 
-private let nativeDatabaseSchemaVersion = 10
+private let nativeDatabaseLegacyBaselineVersion = 10
+private let nativeDatabaseSchemaVersion = 11
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 private let topicSelectSQL = """
@@ -2118,6 +2353,10 @@ extension NativeDatabase: AIWorkflowRecording {}
 package enum NativeDatabaseError: LocalizedError {
     case open(message: String)
     case statement(message: String)
+    case backup(message: String)
+    case unsupportedSchema(found: Int, supported: Int)
+    case migrationFailed(from: Int, to: Int, backupURL: URL, restored: Bool, message: String)
+    case invalidTransition(String)
     case notFound(String)
 
     package var errorDescription: String? {
@@ -2126,6 +2365,15 @@ package enum NativeDatabaseError: LocalizedError {
             return "无法打开本地 SQLite 数据库：\(message)"
         case let .statement(message):
             return "SQLite 操作失败：\(message)"
+        case let .backup(message):
+            return "数据库备份或恢复失败：\(message)"
+        case let .unsupportedSchema(found, supported):
+            return "数据库版本 \(found) 高于当前程序支持的版本 \(supported)，已拒绝降级打开。"
+        case let .migrationFailed(from, to, backupURL, restored, message):
+            let recovery = restored ? "已自动恢复迁移前数据库" : "自动恢复失败，请从备份手动恢复"
+            return "数据库从版本 \(from) 升级到 \(to) 失败：\(message)。\(recovery)：\(backupURL.path)"
+        case let .invalidTransition(message):
+            return "数据库状态冲突：\(message)"
         case let .notFound(value):
             return "未找到数据：\(value)"
         }

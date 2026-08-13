@@ -58,6 +58,7 @@ private struct SeededRNG: RandomNumberGenerator {
     }
 }
 
+@MainActor
 final class CandidateSelectionCoordinatorTests: XCTestCase {
     private func makeDatabase() throws -> NativeDatabase {
         let directory = FileManager.default.temporaryDirectory

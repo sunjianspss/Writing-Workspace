@@ -3,7 +3,7 @@
 Status: Canonical repository navigation and domain language
 
 Owner role: Repository Maintainer
-Validated: 2026-08-12 against commit `7453181` and the current working tree
+Validated: 2026-08-13 against the current working tree
 
 This file tells maintainers and agents where accepted facts live and which words the project uses. It is an index, not a second product or architecture specification.
 
@@ -42,6 +42,8 @@ The macOS app is the only product runtime. Do not add a local HTTP backend or re
 ## Domain language
 
 - **当前稿件 (working draft)** — the editable in-memory writing session currently projected into the UI. It may contain unsaved changes.
+- **写作会话 (writing session)** — `WritingSession`, the sole in-memory owner of current-draft and pending projection state; `WorkshopStore` observes and projects it.
+- **写作工作流 (writing workflow)** — `WritingWorkflow`, the typed command/outcome boundary for committed draft versions, pending transitions, and article saves. Database success precedes session projection.
 - **已保存文章 (saved article)** — the committed article record in the product SQLite database.
 - **待复核版本 (pending review)** — a material generated candidate shown for comparison. It is not an accepted article revision until the author confirms it.
 - **改稿版本 (draft version)** — persisted before/after evidence used for review and recovery. Its review status determines whether it is pending or confirmed.
