@@ -19,6 +19,7 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Product database schema upgrades are versioned, transactional, backed up before migration, and recoverable through a verified restore path.
 - Diagnosis, pre-publish audit, and library evidence moved from the persistent inspector column into their own destinations; draft measurements too small to earn a destination moved into the status bar.
 - Draft text location and workflow narration moved out of `WorkshopStore` into `DraftTextLocator` and `WorkflowNarration`, so the exact-match and truncation rules are independently testable.
+- Selection rewrite, writing advisor, and reader-perspective orchestration moved out of `WorkshopStore` into `WritingWorkflow` vertical slices. An empty rewrite replacement now fails before any run record is written, and advisor results commit with their run trace in one transaction.
 
 ### Fixed
 

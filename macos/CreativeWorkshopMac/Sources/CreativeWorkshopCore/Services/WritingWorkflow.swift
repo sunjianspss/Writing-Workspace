@@ -9,9 +9,16 @@ import Foundation
 package struct WritingWorkflow {
     package enum WorkflowError: LocalizedError {
         case missingExecutor
+        /// 模型返回了空替换文本。改写不能拿空串去覆盖正文，只能整体放弃。
+        case emptyRewriteReplacement
 
         package var errorDescription: String? {
-            "WritingWorkflow 未配置 AI executor"
+            switch self {
+            case .missingExecutor:
+                "WritingWorkflow 未配置 AI executor"
+            case .emptyRewriteReplacement:
+                "模型没有返回可替换文本"
+            }
         }
     }
 
@@ -180,6 +187,106 @@ package struct WritingWorkflow {
         package var error: String
     }
 
+    package struct RewriteSelectionRequest {
+        package var articleID: Int?
+        package var titleSnapshot: String
+        package var context: ContextPackage
+        package var selectedText: String
+        package var surroundingText: String
+        package var mode: RewriteMode
+        package var customInstruction: String?
+        package var style: StyleProfile
+        package var template: PromptTemplate?
+        package var config: ModelConfig
+        package var apiKey: String
+        /// 运行记录里的动作名。定点改写复用同一条纵切片，但记的是「定点改写」。
+        package var actionTitle: String
+        /// 模型没给 note 时写进运行记录的兜底说明。
+        package var fallbackSummary: String
+
+        package init(
+            articleID: Int?,
+            titleSnapshot: String,
+            context: ContextPackage,
+            selectedText: String,
+            surroundingText: String,
+            mode: RewriteMode,
+            customInstruction: String?,
+            style: StyleProfile,
+            template: PromptTemplate?,
+            config: ModelConfig,
+            apiKey: String,
+            actionTitle: String,
+            fallbackSummary: String
+        ) {
+            self.articleID = articleID
+            self.titleSnapshot = titleSnapshot
+            self.context = context
+            self.selectedText = selectedText
+            self.surroundingText = surroundingText
+            self.mode = mode
+            self.customInstruction = customInstruction
+            self.style = style
+            self.template = template
+            self.config = config
+            self.apiKey = apiKey
+            self.actionTitle = actionTitle
+            self.fallbackSummary = fallbackSummary
+        }
+    }
+
+    package struct RewriteSelectionOutcome {
+        package var agentRun: AgentRun
+        /// 已校验非空；空替换在落库前就抛错了，不会走到这里。
+        package var replacement: String
+        package var note: String?
+        package var usedFallback: Bool
+        package var error: String
+    }
+
+    /// 只读分析类工作流的共同输入：不改稿件，只产出参考与运行轨迹。
+    package struct AnalysisRequest {
+        package var articleID: Int?
+        package var titleSnapshot: String
+        package var context: ContextPackage
+        package var style: StyleProfile
+        package var template: PromptTemplate?
+        package var config: ModelConfig
+        package var apiKey: String
+
+        package init(
+            articleID: Int?,
+            titleSnapshot: String,
+            context: ContextPackage,
+            style: StyleProfile,
+            template: PromptTemplate?,
+            config: ModelConfig,
+            apiKey: String
+        ) {
+            self.articleID = articleID
+            self.titleSnapshot = titleSnapshot
+            self.context = context
+            self.style = style
+            self.template = template
+            self.config = config
+            self.apiKey = apiKey
+        }
+    }
+
+    package struct AdvisorOutcome {
+        package var agentRun: AgentRun
+        package var advisorRun: WritingAdvisorRun
+        package var usedFallback: Bool
+        package var error: String
+    }
+
+    package struct ReaderPerspectiveOutcome {
+        package var agentRun: AgentRun
+        package var result: ReaderPerspectiveResult
+        package var usedFallback: Bool
+        package var error: String
+    }
+
     private let database: NativeDatabase
     private let pendingReviewMachine: PendingReviewMachine
     private let executor: AIWorkflowExecuting?
@@ -283,6 +390,172 @@ package struct WritingWorkflow {
                 error: polishRun.error
             )
         }
+    }
+
+    /// 局部改写纵切片：模型调用与运行轨迹落库由同一深模块编排。
+    ///
+    /// 空替换在**任何数据库写入之前**就抛 `emptyRewriteReplacement`——一次没产出的改写
+    /// 不该在运行记录里留下"成功"的痕迹，调用方也不能拿空串覆盖正文。
+    ///
+    /// 本切片不碰正文：替换是否落到稿件上、还是先进待确认，由调用方决定。
+    /// 「定点改写」（诊断闭环）与「局部改写」（手动选区）共用它，只是 `actionTitle` 不同。
+    package func rewriteSelection(
+        _ request: RewriteSelectionRequest,
+        onPartialOutput: (@Sendable (String) -> Void)? = nil
+    ) async throws -> RewriteSelectionOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<RewriteResult> = await executor.execute(
+            NativeWorkflowCatalog.rewriteSelection(
+                context: request.context,
+                selectedText: request.selectedText,
+                surroundingText: request.surroundingText,
+                mode: request.mode,
+                customInstruction: request.customInstruction,
+                style: request.style,
+                template: request.template
+            ),
+            config: request.config,
+            apiKey: request.apiKey,
+            onPartialOutput: onPartialOutput
+        )
+        try Task.checkCancellation()
+
+        let replacement = run.result.replacement ?? run.result.raw_output ?? ""
+        guard !replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw WorkflowError.emptyRewriteReplacement
+        }
+
+        let agentRun = try database.saveAgentRun(
+            runType: request.actionTitle,
+            articleID: request.articleID,
+            titleSnapshot: request.titleSnapshot,
+            status: run.success ? "success" : "fallback",
+            summary: run.result.note ?? request.fallbackSummary,
+            model: request.config.model,
+            elapsedMS: run.elapsedMS,
+            inputSummary: run.inputSummary,
+            outputSummary: run.outputSummary,
+            error: run.error,
+            steps: [
+                AgentRunPayloads.singleStep(
+                    name: request.actionTitle,
+                    success: run.success,
+                    elapsedMS: run.elapsedMS,
+                    inputSummary: run.inputSummary,
+                    outputSummary: run.outputSummary,
+                    error: run.error
+                )
+            ]
+        )
+
+        let note = run.result.note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RewriteSelectionOutcome(
+            agentRun: agentRun,
+            replacement: replacement,
+            note: note?.isEmpty == false ? note : nil,
+            usedFallback: !run.success,
+            error: run.error
+        )
+    }
+
+    /// 智能下一步：判断结果与运行轨迹在同一事务里落库，避免出现"有建议无轨迹"。
+    package func runWritingAdvisor(_ request: AnalysisRequest) async throws -> AdvisorOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<WritingAdvisorResult> = await executor.execute(
+            NativeWorkflowCatalog.writingAdvisor(
+                context: request.context,
+                style: request.style,
+                template: request.template
+            ),
+            config: request.config,
+            apiKey: request.apiKey
+        )
+        try Task.checkCancellation()
+
+        return try database.withTransaction {
+            let agentRun = try recordSingleStepRun(
+                actionTitle: "智能判断下一步",
+                summary: run.result.next_action ?? run.result.main_problem ?? "完成智能下一步判断。",
+                request: request,
+                run: run
+            )
+            let advisorRun = try database.saveWritingAdvisorRun(
+                result: run.result,
+                context: request.context,
+                articleID: request.articleID,
+                titleSnapshot: request.titleSnapshot,
+                model: request.config.model
+            )
+            return AdvisorOutcome(
+                agentRun: agentRun,
+                advisorRun: advisorRun,
+                usedFallback: !run.success,
+                error: run.error
+            )
+        }
+    }
+
+    /// 读者视角模拟：只产出参考，不写稿件事实，所以除运行轨迹外没有别的持久化。
+    package func runReaderPerspective(_ request: AnalysisRequest) async throws -> ReaderPerspectiveOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<ReaderPerspectiveResult> = await executor.execute(
+            NativeWorkflowCatalog.readerPerspective(
+                context: request.context,
+                style: request.style,
+                template: request.template
+            ),
+            config: request.config,
+            apiKey: request.apiKey
+        )
+        try Task.checkCancellation()
+
+        let agentRun = try recordSingleStepRun(
+            actionTitle: "读者视角模拟",
+            summary: run.result.drop_off_point ?? run.result.note ?? "完成读者视角模拟。",
+            request: request,
+            run: run
+        )
+        return ReaderPerspectiveOutcome(
+            agentRun: agentRun,
+            result: run.result,
+            usedFallback: !run.success,
+            error: run.error
+        )
+    }
+
+    /// 单步工作流的运行轨迹写入。调用失败一律记为 `fallback` 并保留错误原文——
+    /// 运行记录必须能区分「模型给的」和「本地兜底的」。
+    private func recordSingleStepRun<Output>(
+        actionTitle: String,
+        summary: String,
+        request: AnalysisRequest,
+        run: AIRun<Output>
+    ) throws -> AgentRun {
+        try database.saveAgentRun(
+            runType: actionTitle,
+            articleID: request.articleID,
+            titleSnapshot: request.titleSnapshot,
+            status: run.success ? "success" : "fallback",
+            summary: summary,
+            model: request.config.model,
+            elapsedMS: run.elapsedMS,
+            inputSummary: run.inputSummary,
+            outputSummary: run.outputSummary,
+            error: run.error,
+            steps: [
+                AgentRunPayloads.singleStep(
+                    name: actionTitle,
+                    success: run.success,
+                    elapsedMS: run.elapsedMS,
+                    inputSummary: run.inputSummary,
+                    outputSummary: run.outputSummary,
+                    error: run.error
+                )
+            ]
+        )
     }
 
     /// 唯一执行入口。每个 outcome 都表示对应的持久化语义已经成功完成。

@@ -39,6 +39,10 @@ printf '%s\n' \
   '    func forbiddenFixtureWrite() throws {' \
   '        _ = try database.saveArticle(title: "fixture")' \
   '        _ = NativeWorkflowCatalog.polishDraft(context: fixture)' \
+  '        _ = NativeWorkflowCatalog.rewriteSelection(context: fixture)' \
+  '        _ = NativeWorkflowCatalog.writingAdvisor(context: fixture)' \
+  '        _ = NativeWorkflowCatalog.readerPerspective(context: fixture)' \
+  '        _ = try database.saveWritingAdvisorRun(result: fixture)' \
   '    }' \
   '}' \
   > "$SRC_DIR/Stores/WorkshopStore+Fixture.swift"
@@ -67,5 +71,20 @@ if ! grep -Fq 'NativeWorkflowCatalog.polishDraft' "$violation_output"; then
   sed -n '1,160p' "$violation_output" >&2
   exit 1
 fi
+
+# 24.16 迁出的三条编排与顾问轨迹写入：每一条都必须能被单独指名，
+# 否则"守卫覆盖了它"只是错觉。
+for forbidden in \
+  'NativeWorkflowCatalog.rewriteSelection' \
+  'NativeWorkflowCatalog.writingAdvisor' \
+  'NativeWorkflowCatalog.readerPerspective' \
+  'database.saveWritingAdvisorRun'
+do
+  if ! grep -Fq "$forbidden" "$violation_output"; then
+    echo "FAIL: guard diagnostic did not identify the injected violation: $forbidden" >&2
+    sed -n '1,160p' "$violation_output" >&2
+    exit 1
+  fi
+done
 
 echo "Architecture guard self-test: clean fixture passed; injected violation was rejected."
