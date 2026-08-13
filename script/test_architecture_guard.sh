@@ -43,6 +43,12 @@ printf '%s\n' \
   '        _ = NativeWorkflowCatalog.writingAdvisor(context: fixture)' \
   '        _ = NativeWorkflowCatalog.readerPerspective(context: fixture)' \
   '        _ = try database.saveWritingAdvisorRun(result: fixture)' \
+  '        _ = NativeWorkflowCatalog.writingReview(context: fixture)' \
+  '        _ = try database.saveWritingReview(result: fixture)' \
+  '        _ = NativeWorkflowCatalog.improveDraftFromReview(context: fixture)' \
+  '        _ = DeepDraftCoordinator(aiClient: fixture)' \
+  '        _ = NativeWorkflowCatalog.publishAssets(context: fixture)' \
+  '        _ = try database.savePublishAssets(result: fixture)' \
   '    }' \
   '}' \
   > "$SRC_DIR/Stores/WorkshopStore+Fixture.swift"
@@ -78,7 +84,13 @@ for forbidden in \
   'NativeWorkflowCatalog.rewriteSelection' \
   'NativeWorkflowCatalog.writingAdvisor' \
   'NativeWorkflowCatalog.readerPerspective' \
-  'database.saveWritingAdvisorRun'
+  'database.saveWritingAdvisorRun' \
+  'NativeWorkflowCatalog.writingReview' \
+  'database.saveWritingReview' \
+  'NativeWorkflowCatalog.improveDraftFromReview' \
+  'DeepDraftCoordinator' \
+  'NativeWorkflowCatalog.publishAssets' \
+  'database.savePublishAssets'
 do
   if ! grep -Fq "$forbidden" "$violation_output"; then
     echo "FAIL: guard diagnostic did not identify the injected violation: $forbidden" >&2

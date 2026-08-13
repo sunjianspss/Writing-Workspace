@@ -621,54 +621,31 @@ final class WorkshopStore: ObservableObject {
 
     func performReviewCurrentDraft() async {
         await run("写作诊断", cancellable: true) {
-            let style = try self.resolveStyle()
-            let previousReview = self.latestReview
-            var context = self.currentWritingContext(style: style)
-            context.title = self.title
-            context.summary = self.summary
-            context.idea = self.ideaInput
-            context.direction = self.normalizedDirection
-            context.outline_excerpt = self.outline
-            context.content_excerpt = self.content
-            context.word_count = self.content.count
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.writingReview(
-                    context: context,
-                    style: style,
-                    previousReview: previousReview,
-                    template: self.promptTemplate(for: .writingReview)
+            var analysis = try self.analysisRequest(template: .writingReview)
+            // 诊断看的是完整现场，而不是通用上下文的摘要版。
+            analysis.context.title = self.title
+            analysis.context.summary = self.summary
+            analysis.context.idea = self.ideaInput
+            analysis.context.direction = self.normalizedDirection
+            analysis.context.outline_excerpt = self.outline
+            analysis.context.content_excerpt = self.content
+            analysis.context.word_count = self.content.count
+
+            let outcome = try await self.writingWorkflow.runWritingReview(
+                WritingWorkflow.ReviewRequest(
+                    analysis: analysis,
+                    previousReview: self.latestReview,
+                    reviewedSnapshot: self.currentReviewableSnapshot()
                 )
-            ).writingReviewResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "写作诊断",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.summary ?? "完成写作诊断。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "写作诊断",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
             )
-            let review = try self.database.saveWritingReview(
-                result: response.result,
-                articleID: self.selectedArticleID,
-                titleSnapshot: self.titleIfAvailable(),
-                model: self.normalizedModel,
-                reviewedSnapshot: self.currentReviewableSnapshot()
-            )
-            self.latestReview = review
+            self.projectAgentRun(outcome.agentRun)
+            self.latestReview = outcome.review
             self.writingReviews = try self.database.listWritingReviews()
-            self.statusText = response.success == true ? "写作诊断已完成" : "已使用本地诊断：\(response.error ?? "未配置 API Key")"
+            self.statusText = self.analysisStatusText(
+                success: "写作诊断已完成",
+                fallbackPrefix: "已使用本地诊断",
+                outcome: (outcome.usedFallback, outcome.error)
+            )
         }
     }
 
@@ -687,45 +664,26 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("按诊断改全文", cancellable: true) {
+            // checkpoint 必须在调用模型之前取：交付时要拿它证明会话没被改过。
             let checkpoint = self.captureWritingSessionCheckpoint()
-            let style = try self.resolveStyle()
-            let context = self.currentWritingContext(style: style)
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.improveDraftFromReview(
-                    context: context,
+            let analysis = try self.analysisRequest(template: .writingReview)
+            let outcome = try await self.writingWorkflow.reviseFromReview(
+                WritingWorkflow.ReviseFromReviewRequest(
+                    analysis: analysis,
                     content: self.content,
-                    review: review,
-                    style: style
+                    review: review
                 )
-            ).draftResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "按诊断改全文",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.summary ?? review.summary,
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "按诊断改全文",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
             )
+            self.projectAgentRun(outcome.agentRun)
+
             try await self.finalizeGeneratedDraft(
-                result: response.result,
+                result: outcome.result,
                 fallbackTitle: self.titleIfAvailable(),
-                style: style,
+                style: analysis.style,
                 actionTitle: "按诊断改全文",
                 successNote: self.reviewRevisionNote(review),
-                failureNote: response.error,
-                usedFallback: response.success != true,
+                failureNote: outcome.error,
+                usedFallback: outcome.usedFallback,
                 clearArticleSelection: false,
                 checkpoint: checkpoint
             )
@@ -746,42 +704,37 @@ final class WorkshopStore: ObservableObject {
             let checkpoint = self.captureWritingSessionCheckpoint()
             let style = try self.resolveStyle()
             let retrieval = try self.retrievedMaterialsBlock(query: [self.title, self.ideaInput, self.outline].joined(separator: "\n"))
-            let coordinator = DeepDraftCoordinator(aiClient: self.aiClient)
-            let output = try await coordinator.run(
-                input: DeepDraftInput(
-                    title: self.titleIfAvailable(),
-                    summary: self.summary,
-                    content: self.content,
-                    outline: self.outline,
-                    idea: self.ideaInput,
-                    direction: self.normalizedDirection,
-                    materials: retrieval.materials,
-                    style: style,
-                    previousReview: self.latestReview,
-                    writingReviewTemplate: self.promptTemplate(for: .writingReview),
-                    config: self.currentModelConfig,
-                    apiKey: self.apiKeyInput
+            let outcome = try await self.writingWorkflow.deepRevise(
+                WritingWorkflow.DeepRevisionRequest(
+                    articleID: self.selectedArticleID,
+                    titleSnapshot: self.titleIfAvailable(),
+                    input: DeepDraftInput(
+                        title: self.titleIfAvailable(),
+                        summary: self.summary,
+                        content: self.content,
+                        outline: self.outline,
+                        idea: self.ideaInput,
+                        direction: self.normalizedDirection,
+                        materials: retrieval.materials,
+                        style: style,
+                        previousReview: self.latestReview,
+                        writingReviewTemplate: self.promptTemplate(for: .writingReview),
+                        config: self.currentModelConfig,
+                        apiKey: self.apiKeyInput
+                    )
                 )
             )
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "深度成稿",
-                status: output.success ? "success" : "fallback",
-                summary: output.summaryText,
-                elapsedMS: output.elapsed_ms,
-                inputSummary: "从当前正文自动执行诊断→修订→复评。",
-                outputSummary: output.summaryText,
-                error: output.error,
-                steps: output.steps
-            )
+            self.projectAgentRun(outcome.agentRun)
+
+            let output = outcome.output
             try await self.finalizeGeneratedDraft(
                 result: output.draft,
                 fallbackTitle: self.titleIfAvailable(),
                 style: style,
                 actionTitle: "深度成稿",
                 successNote: output.summaryText,
-                failureNote: output.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : output.error,
-                usedFallback: !output.success,
+                failureNote: outcome.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : outcome.error,
+                usedFallback: outcome.usedFallback,
                 clearArticleSelection: false,
                 retrievedFragments: retrieval.fragments,
                 iterationSummary: output.iterations,
@@ -1023,56 +976,33 @@ final class WorkshopStore: ObservableObject {
         }
 
         await run("生成发布物料", cancellable: true) {
-            let style = try self.resolveStyle()
-            var context = self.currentWritingContext(style: style)
-            context.title = self.title
-            context.summary = self.summary
-            context.content_excerpt = self.content
-            context.word_count = self.content.count
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.publishAssets(
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .publishAssets)
-                )
-            ).publishAssetsResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "生成发布物料",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.summary ?? response.result.cover_text ?? "完成发布物料生成。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "生成发布物料",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
-            )
-            let assets = try self.database.savePublishAssets(
-                result: response.result,
-                articleID: self.selectedArticleID,
-                titleSnapshot: self.titleIfAvailable(),
-                model: self.normalizedModel
-            )
-            self.latestPublishAssets = assets
+            var analysis = try self.analysisRequest(template: .publishAssets)
+            // 物料照的是当前现场，而不是通用上下文的摘要版。
+            analysis.context.title = self.title
+            analysis.context.summary = self.summary
+            analysis.context.content_excerpt = self.content
+            analysis.context.word_count = self.content.count
+
+            let outcome = try await self.writingWorkflow.generatePublishAssets(analysis)
+            self.projectAgentRun(outcome.agentRun)
+            self.latestPublishAssets = outcome.assets
             self.publishAssetsHistory = try self.database.listPublishAssets()
+
+            // 只在作者没写摘要时才用生成的补位——不覆盖作者已经写下的东西。
             if self.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               let generatedSummary = response.result.summary,
+               let generatedSummary = outcome.assets.summary,
                !generatedSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 self.summary = generatedSummary
             }
-            if let tags = response.result.tags, !tags.isEmpty {
-                self.draftTags = tags
+            if !outcome.assets.tags.isEmpty {
+                self.draftTags = outcome.assets.tags
             }
-            self.statusText = response.success == true ? "发布物料已生成" : "已使用本地发布物料：\(response.error ?? "未配置 API Key")"
+
+            self.statusText = self.analysisStatusText(
+                success: "发布物料已生成",
+                fallbackPrefix: "已使用本地发布物料",
+                outcome: (outcome.usedFallback, outcome.error)
+            )
         }
     }
 
