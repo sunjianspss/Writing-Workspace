@@ -273,6 +273,85 @@ package struct WritingWorkflow {
         }
     }
 
+    /// 写作诊断：在只读分析之上多两样东西——跨轮对比用的上一版诊断，
+    /// 以及本次实际被诊断文本的快照。
+    package struct ReviewRequest {
+        package var analysis: AnalysisRequest
+        package var previousReview: WritingReview?
+        /// 防空转（18.3.2）的比对基准。必须是**本次送去诊断的那份文本**，
+        /// 存错了下一轮要么永远重复提示，要么永远不提示。
+        package var reviewedSnapshot: String
+
+        package init(
+            analysis: AnalysisRequest,
+            previousReview: WritingReview?,
+            reviewedSnapshot: String
+        ) {
+            self.analysis = analysis
+            self.previousReview = previousReview
+            self.reviewedSnapshot = reviewedSnapshot
+        }
+    }
+
+    package struct ReviewOutcome {
+        package var agentRun: AgentRun
+        package var review: WritingReview
+        package var usedFallback: Bool
+        package var error: String
+    }
+
+    /// 生成类工作流的共同产出：一份候选稿件加它的运行轨迹。
+    ///
+    /// 这里**不做交付**。候选是否进入待复核，取决于调用方能否证明会话没有过期
+    /// （checkpoint 校验），那是投影层的判断，不属于本切片。
+    package struct GeneratedDraftOutcome {
+        package var agentRun: AgentRun
+        package var result: DraftResult
+        package var usedFallback: Bool
+        package var error: String
+    }
+
+    /// 深度成稿：诊断→修订→复评的串联本身归 `DeepDraftCoordinator`（纯编排，不碰库）。
+    /// 本切片负责把 executor 交给它，并把多步运行轨迹落库。
+    package struct DeepRevisionRequest {
+        package var articleID: Int?
+        package var titleSnapshot: String
+        package var input: DeepDraftInput
+
+        package init(articleID: Int?, titleSnapshot: String, input: DeepDraftInput) {
+            self.articleID = articleID
+            self.titleSnapshot = titleSnapshot
+            self.input = input
+        }
+    }
+
+    package struct DeepRevisionOutcome {
+        package var agentRun: AgentRun
+        package var output: DeepDraftOutput
+        package var usedFallback: Bool
+        package var error: String
+    }
+
+    package struct ReviseFromReviewRequest {
+        package var analysis: AnalysisRequest
+        package var content: String
+        package var review: WritingReview
+
+        package init(analysis: AnalysisRequest, content: String, review: WritingReview) {
+            self.analysis = analysis
+            self.content = content
+            self.review = review
+        }
+    }
+
+    package struct PublishAssetsOutcome {
+        package var agentRun: AgentRun
+        /// 已落库的物料记录。摘要与标签直接取自它，调用方不需要另一份原始结果。
+        package var assets: PublishAssets
+        package var usedFallback: Bool
+        package var error: String
+    }
+
     package struct AdvisorOutcome {
         package var agentRun: AgentRun
         package var advisorRun: WritingAdvisorRun
@@ -457,6 +536,158 @@ package struct WritingWorkflow {
             usedFallback: !run.success,
             error: run.error
         )
+    }
+
+    /// 深度成稿：把 executor 交给 `DeepDraftCoordinator` 跑完三段串联，再把整条
+    /// 多步轨迹落成一条运行记录。
+    ///
+    /// 轨迹必须保留协调器给出的**每一步**——深度成稿失败时，作者要能看出是诊断、
+    /// 修订还是复评那一段出的问题；压成一步就没法复盘了。
+    ///
+    /// 和 `reviseFromReview` 一样不做交付，理由相同（会话可能已过期）。
+    package func deepRevise(_ request: DeepRevisionRequest) async throws -> DeepRevisionOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let output = try await DeepDraftCoordinator(aiClient: executor).run(input: request.input)
+        try Task.checkCancellation()
+
+        let agentRun = try database.saveAgentRun(
+            runType: "深度成稿",
+            articleID: request.articleID,
+            titleSnapshot: request.titleSnapshot,
+            status: output.success ? "success" : "fallback",
+            summary: output.summaryText,
+            model: request.input.config.model,
+            elapsedMS: output.elapsed_ms,
+            inputSummary: "从当前正文自动执行诊断→修订→复评。",
+            outputSummary: output.summaryText,
+            error: output.error,
+            steps: output.steps
+        )
+        return DeepRevisionOutcome(
+            agentRun: agentRun,
+            output: output,
+            usedFallback: !output.success,
+            error: output.error
+        )
+    }
+
+    /// 按诊断改全文：产出候选稿件与运行轨迹，**不落交付**。
+    ///
+    /// 交付留给调用方，是因为它必须先证明会话没有过期——生成期间作者可能已经
+    /// 改了正文。把交付并进来就等于让本切片替投影层做那个判断。
+    /// 模型没给摘要时退回诊断自己的摘要，运行记录不留空。
+    package func reviseFromReview(
+        _ request: ReviseFromReviewRequest
+    ) async throws -> GeneratedDraftOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<DraftResult> = await executor.execute(
+            NativeWorkflowCatalog.improveDraftFromReview(
+                context: request.analysis.context,
+                content: request.content,
+                review: request.review,
+                style: request.analysis.style
+            ),
+            config: request.analysis.config,
+            apiKey: request.analysis.apiKey
+        )
+        try Task.checkCancellation()
+
+        let agentRun = try recordSingleStepRun(
+            actionTitle: "按诊断改全文",
+            summary: run.result.summary ?? request.review.summary,
+            request: request.analysis,
+            run: run
+        )
+        return GeneratedDraftOutcome(
+            agentRun: agentRun,
+            result: run.result,
+            usedFallback: !run.success,
+            error: run.error
+        )
+    }
+
+    /// 写作诊断：诊断记录与运行轨迹在同一事务里落库。
+    ///
+    /// 诊断连同 `reviewedSnapshot` 一起写入——这条快照是防空转的唯一依据，
+    /// 和诊断分开写就可能出现"有诊断无基准"的记录。
+    package func runWritingReview(_ request: ReviewRequest) async throws -> ReviewOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<WritingReviewResult> = await executor.execute(
+            NativeWorkflowCatalog.writingReview(
+                context: request.analysis.context,
+                style: request.analysis.style,
+                previousReview: request.previousReview,
+                template: request.analysis.template
+            ),
+            config: request.analysis.config,
+            apiKey: request.analysis.apiKey
+        )
+        try Task.checkCancellation()
+
+        return try database.withTransaction {
+            let agentRun = try recordSingleStepRun(
+                actionTitle: "写作诊断",
+                summary: run.result.summary ?? "完成写作诊断。",
+                request: request.analysis,
+                run: run
+            )
+            let review = try database.saveWritingReview(
+                result: run.result,
+                articleID: request.analysis.articleID,
+                titleSnapshot: request.analysis.titleSnapshot,
+                model: request.analysis.config.model,
+                reviewedSnapshot: request.reviewedSnapshot
+            )
+            return ReviewOutcome(
+                agentRun: agentRun,
+                review: review,
+                usedFallback: !run.success,
+                error: run.error
+            )
+        }
+    }
+
+    /// 发布物料：物料记录与运行轨迹在同一事务里落库。
+    ///
+    /// 物料是派生文案，不是稿件事实——本切片不改标题、摘要或正文。
+    /// 作者摘要为空时要不要拿生成的摘要补上，是投影层的决定。
+    package func generatePublishAssets(_ request: AnalysisRequest) async throws -> PublishAssetsOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<PublishAssetsResult> = await executor.execute(
+            NativeWorkflowCatalog.publishAssets(
+                context: request.context,
+                style: request.style,
+                template: request.template
+            ),
+            config: request.config,
+            apiKey: request.apiKey
+        )
+        try Task.checkCancellation()
+
+        return try database.withTransaction {
+            let agentRun = try recordSingleStepRun(
+                actionTitle: "生成发布物料",
+                summary: run.result.summary ?? run.result.cover_text ?? "完成发布物料生成。",
+                request: request,
+                run: run
+            )
+            let assets = try database.savePublishAssets(
+                result: run.result,
+                articleID: request.articleID,
+                titleSnapshot: request.titleSnapshot,
+                model: request.config.model
+            )
+            return PublishAssetsOutcome(
+                agentRun: agentRun,
+                assets: assets,
+                usedFallback: !run.success,
+                error: run.error
+            )
+        }
     }
 
     /// 智能下一步：判断结果与运行轨迹在同一事务里落库，避免出现"有建议无轨迹"。
