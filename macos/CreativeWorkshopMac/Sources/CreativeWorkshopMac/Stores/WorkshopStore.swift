@@ -445,7 +445,7 @@ final class WorkshopStore: ObservableObject {
             analysis.context.materials_excerpt = self.materials
 
             let outcome = try await self.writingWorkflow.generateOutline(
-                WritingWorkflow.OutlineRequest(analysis: analysis, topic: topicPayload),
+                WritingWorkflow.TopicDraftingRequest(analysis: analysis, topic: topicPayload),
                 onPartialOutput: self.streamingStatusCallback(actionName: "生成大纲")
             ) {
                 // 生成期间作者动过稿件就整次作废，不留下没人用的大纲轨迹。
@@ -477,47 +477,24 @@ final class WorkshopStore: ObservableObject {
 
         await run("大纲成稿", cancellable: true) {
             let checkpoint = self.captureWritingSessionCheckpoint()
-            let style = try self.resolveStyle()
-            var context = self.currentWritingContext(style: style)
-            context.outline_excerpt = self.outline
-            context.materials_excerpt = self.materials
-            let response = await self.executeWorkflow(
-                NativeWorkflowCatalog.draft(
-                    topic: topicPayload,
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .draft)
-                ),
+            var analysis = try self.analysisRequest(template: .draft)
+            analysis.context.outline_excerpt = self.outline
+            analysis.context.materials_excerpt = self.materials
+
+            let outcome = try await self.writingWorkflow.draftFromOutline(
+                WritingWorkflow.TopicDraftingRequest(analysis: analysis, topic: topicPayload),
                 onPartialOutput: self.streamingStatusCallback(actionName: "大纲成稿")
-            ).draftResponse
-            try Task.checkCancellation()
-            try self.recordAgentRun(
-                runType: "大纲成稿",
-                status: response.success == true ? "success" : "fallback",
-                summary: response.result.summary ?? "根据当前大纲生成正文。",
-                elapsedMS: response.elapsed_ms ?? 0,
-                inputSummary: response.input_summary ?? "",
-                outputSummary: response.output_summary ?? "",
-                error: response.error ?? "",
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "大纲成稿",
-                        success: response.success == true,
-                        elapsedMS: response.elapsed_ms ?? 0,
-                        inputSummary: response.input_summary ?? "",
-                        outputSummary: response.output_summary ?? "",
-                        error: response.error ?? ""
-                    )
-                ]
             )
+            self.projectAgentRun(outcome.agentRun)
+
             try await self.finalizeGeneratedDraft(
-                result: response.result,
+                result: outcome.result,
                 fallbackTitle: self.selectedTopic?.title ?? self.titleIfAvailable(),
-                style: style,
+                style: analysis.style,
                 actionTitle: "大纲成稿",
                 successNote: "根据当前大纲生成正文",
-                failureNote: response.error,
-                usedFallback: response.success != true,
+                failureNote: outcome.error,
+                usedFallback: outcome.usedFallback,
                 clearArticleSelection: true,
                 checkpoint: checkpoint
             )
@@ -553,11 +530,11 @@ final class WorkshopStore: ObservableObject {
                     try self.requireWritingSessionCheckpoint(checkpoint)
                 }
             )
-            do {
-                try self.writingSession.stage(outcome.pending, expectedRevision: checkpoint.revision)
-            } catch {
-                _ = try? self.writingWorkflow.execute(.cleanupPending(versionID: outcome.version.id))
-                throw error
+            try self.writingWorkflow.commitPending(
+                version: outcome.version,
+                pending: outcome.pending
+            ) { pending in
+                try self.writingSession.stage(pending, expectedRevision: checkpoint.revision)
             }
             if let tags = outcome.generatedTags { self.draftTags = tags }
             self.agentRuns = [outcome.agentRun] + self.agentRuns.filter { $0.id != outcome.agentRun.id }

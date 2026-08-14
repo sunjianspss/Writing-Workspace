@@ -344,6 +344,32 @@ package struct WritingWorkflow {
         }
     }
 
+    /// 生成类动作交付待复核前的自检输入。
+    ///
+    /// `polish` 在切片内部做自检，而 Store 侧的 `finalizeGeneratedDraft` 曾在自己那边
+    /// 做——同一件事两种做法。这个请求让后者也把自检交回工作流。
+    package struct SelfCheckRequest {
+        package var context: ContextPackage
+        package var style: StyleProfile
+        package var template: PromptTemplate?
+        package var config: ModelConfig
+        package var apiKey: String
+
+        package init(
+            context: ContextPackage,
+            style: StyleProfile,
+            template: PromptTemplate?,
+            config: ModelConfig,
+            apiKey: String
+        ) {
+            self.context = context
+            self.style = style
+            self.template = template
+            self.config = config
+            self.apiKey = apiKey
+        }
+    }
+
     package struct TopicsRequest {
         package var analysis: AnalysisRequest
         /// 运行记录里的动作名：手动想法是「生成选题」，素材入口是「从素材生成选题」。
@@ -375,7 +401,8 @@ package struct WritingWorkflow {
         package var error: String
     }
 
-    package struct OutlineRequest {
+    /// 大纲与大纲成稿共用：两者的输入完全相同——一条选题加一份分析上下文。
+    package struct TopicDraftingRequest {
         package var analysis: AnalysisRequest
         package var topic: TopicPayload
 
@@ -746,13 +773,54 @@ package struct WritingWorkflow {
         }
     }
 
+    /// 大纲成稿：按当前大纲产出正文候选与运行轨迹，**不做交付**。
+    ///
+    /// 与 `reviseFromReview` 同样把交付留给调用方（会话可能已过期）。
+    ///
+    /// 注意它没有 `validateBeforeCommit`——`generateOutline` 有。这个不对称是迁出前
+    /// 就存在的：大纲会直接覆盖编辑器内容，所以过期就整次作废；而成稿的产物要走
+    /// 待复核，过期会在 `commitPending` 的投影处被挡下并回收 pending 版本。此处保持
+    /// 原行为，没有顺手加校验——那是行为变更，该单独论证。
+    package func draftFromOutline(
+        _ request: TopicDraftingRequest,
+        onPartialOutput: (@Sendable (String) -> Void)? = nil
+    ) async throws -> GeneratedDraftOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<DraftResult> = await executor.execute(
+            NativeWorkflowCatalog.draft(
+                topic: request.topic,
+                context: request.analysis.context,
+                style: request.analysis.style,
+                template: request.analysis.template
+            ),
+            config: request.analysis.config,
+            apiKey: request.analysis.apiKey,
+            onPartialOutput: onPartialOutput
+        )
+        try Task.checkCancellation()
+
+        let agentRun = try recordSingleStepRun(
+            actionTitle: "大纲成稿",
+            summary: run.result.summary ?? "根据当前大纲生成正文。",
+            request: request.analysis,
+            run: run
+        )
+        return GeneratedDraftOutcome(
+            agentRun: agentRun,
+            result: run.result,
+            usedFallback: !run.success,
+            error: run.error
+        )
+    }
+
     /// 生成大纲：产出大纲与运行轨迹。
     ///
     /// `validateBeforeCommit` 在**任何数据库写入之前**运行。生成期间作者可能已经
     /// 改了稿件，这时整次生成必须作废——留下一条运行记录会让轨迹里出现一次
     /// 谁也没用上的大纲。语义与 `polish` 的同名参数一致。
     package func generateOutline(
-        _ request: OutlineRequest,
+        _ request: TopicDraftingRequest,
         onPartialOutput: (@Sendable (String) -> Void)? = nil,
         validateBeforeCommit: () throws -> Void
     ) async throws -> OutlineOutcome {
@@ -926,6 +994,61 @@ package struct WritingWorkflow {
                 )
             ]
         )
+    }
+
+    /// 自检并交付待复核：模型自检、pending 落库两步归同一层。
+    ///
+    /// 自检不阻塞交付——它只是给编辑器的旁注（18.3.5）。但它必须**在** pending 落库
+    /// 之前跑完，因为自检结果要随 pending 一起写进去；分两步写就会出现有 pending
+    /// 无自检的记录。
+    package func selfCheckAndDeliver(
+        selfCheck: SelfCheckRequest,
+        delivery: PendingDelivery
+    ) async throws -> (version: DraftVersion, pending: PendingDraftReview, selfCheck: DraftSelfCheckResult?) {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<DraftSelfCheckResult> = await executor.execute(
+            NativeWorkflowCatalog.draftSelfCheck(
+                context: selfCheck.context,
+                style: selfCheck.style,
+                template: selfCheck.template
+            ),
+            config: selfCheck.config,
+            apiKey: selfCheck.apiKey
+        )
+        try Task.checkCancellation()
+
+        var delivery = delivery
+        delivery.selfCheck = run.result
+
+        guard case let .pendingDelivered(version, pending) = try execute(.deliverPending(delivery)) else {
+            preconditionFailure("WritingWorkflow returned an invalid pending outcome")
+        }
+        return (version, pending, run.result)
+    }
+
+    /// 把交付好的待复核版本投影出去；投影失败则回收它。
+    ///
+    /// 交付已经在数据库里留下了一个 pending 版本，但只有投影成功它才算真的到了作者面前。
+    /// 投影失败时那一行必须回收，否则库里会留下一个界面上看不见、也无法确认或放弃的
+    /// 待复核版本。补偿必须和它要回收的那次写入在同一层——此前 `polishDraft` 与
+    /// `finalizeGeneratedDraft` 各自抄了一遍这段 do/catch，是两份会各自漂移的协议。
+    ///
+    /// `stage` 由调用方提供，因为投影目标（`WritingSession`）不属于本层。
+    ///
+    /// 残留风险：回收本身失败时无处上报，仍会留下孤儿 pending 行。这里保持既有语义
+    /// ——原始的投影错误才是作者需要看到的那个，优先把它抛出去。
+    package func commitPending(
+        version: DraftVersion,
+        pending: PendingDraftReview,
+        stage: (PendingDraftReview) throws -> Void
+    ) throws {
+        do {
+            try stage(pending)
+        } catch {
+            _ = try? execute(.cleanupPending(versionID: version.id))
+            throw error
+        }
     }
 
     /// 唯一执行入口。每个 outcome 都表示对应的持久化语义已经成功完成。

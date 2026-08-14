@@ -948,6 +948,35 @@ final class WritingWorkflowOutlineTests: XCTestCase {
         XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
     }
 
+    /// 大纲成稿共用同一个请求结构，但产出的是正文候选，且不做交付。
+    func testDraftFromOutlineRecordsRunWithoutDelivering() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: OutlineExecutor())
+
+        let outcome = try await workflow.draftFromOutline(makeRequest(database: database))
+
+        XCTAssertEqual(outcome.result.content, "大纲成稿的正文")
+        XCTAssertEqual(outcome.agentRun.run_type, "大纲成稿")
+        XCTAssertEqual(try database.listAgentRuns(limit: 10).map(\.id), [outcome.agentRun.id])
+        XCTAssertTrue(
+            try database.listDraftVersions(limit: 10).isEmpty,
+            "交付归调用方，本切片不落待复核版本"
+        )
+    }
+
+    /// 模型没给摘要时退回固定说明，运行记录不留空。
+    func testDraftRunSummaryFallsBackWhenModelGivesNone() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: OutlineExecutor(draftSummary: nil)
+        )
+
+        let outcome = try await workflow.draftFromOutline(makeRequest(database: database))
+
+        XCTAssertEqual(outcome.agentRun.summary, "根据当前大纲生成正文。")
+    }
+
     func testMissingExecutorWritesNoRun() async throws {
         let database = try makeDatabase()
         let workflow = WritingWorkflow(database: database)
@@ -1020,7 +1049,7 @@ final class WritingWorkflowOutlineTests: XCTestCase {
         return try NativeDatabase(databaseURL: url)
     }
 
-    private func makeRequest(database: NativeDatabase) throws -> WritingWorkflow.OutlineRequest {
+    private func makeRequest(database: NativeDatabase) throws -> WritingWorkflow.TopicDraftingRequest {
         let style = try database.defaultStyle()
         return .init(
             analysis: .init(
@@ -1074,11 +1103,29 @@ private enum OutlineTestFailure: Error {
 }
 
 private final class OutlineExecutor: AIWorkflowExecuting {
+    private let draftSummary: String?
+
+    init(draftSummary: String? = "已成稿") {
+        self.draftSummary = draftSummary
+    }
+
     func execute<Output: Codable>(
         _ descriptor: WorkflowDescriptor<Output>,
         config: ModelConfig,
         apiKey: String
     ) async -> AIRun<Output> {
+        if let result = DraftResult(
+            title: "成稿标题",
+            content: "大纲成稿的正文",
+            summary: draftSummary,
+            tags: nil,
+            raw_output: nil
+        ) as? Output {
+            return AIRun(
+                result: result, elapsedMS: 4, success: true, error: "",
+                inputSummary: "成稿输入", outputSummary: "成稿输出"
+            )
+        }
         if let result = OutlineResult(
             title: "大纲标题",
             opening: "开头",
@@ -1308,6 +1355,168 @@ private final class TopicsExecutor: AIWorkflowExecuting {
             return AIRun(
                 result: result, elapsedMS: 3, success: true, error: "",
                 inputSummary: "选题输入", outputSummary: "选题输出"
+            )
+        }
+        return AIRun(
+            result: descriptor.fallback(), elapsedMS: 1, success: false,
+            error: "unexpected workflow", inputSummary: "", outputSummary: ""
+        )
+    }
+}
+
+/// 自检与补偿回收（24.19）：此前 `polishDraft` 与 `finalizeGeneratedDraft` 各抄了一遍
+/// stage/catch/cleanup，且自检位置一处在工作流内、一处在 Store，是两份会各自漂移的协议。
+@MainActor
+final class WritingWorkflowCommitPendingTests: XCTestCase {
+    /// 投影失败时，已落库的 pending 版本必须被回收——否则库里留下界面看不见、
+    /// 也无法确认或放弃的孤儿版本。
+    func testFailedStageCleansUpTheDeliveredPendingVersion() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+        XCTAssertEqual(try database.listDraftVersions(limit: 10).count, 1)
+
+        do {
+            try workflow.commitPending(version: delivered.version, pending: delivered.pending) { _ in
+                throw CommitTestFailure.staleRevision
+            }
+            XCTFail("投影失败必须抛出")
+        } catch CommitTestFailure.staleRevision {
+            // 预期负向路径：原始投影错误优先抛出。
+        }
+
+        XCTAssertTrue(
+            try database.listDraftVersions(limit: 10).isEmpty,
+            "投影失败后 pending 版本必须已被回收"
+        )
+    }
+
+    /// 投影成功时不得回收。
+    func testSuccessfulStageKeepsThePendingVersion() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        var staged: PendingDraftReview?
+        try workflow.commitPending(version: delivered.version, pending: delivered.pending) { pending in
+            staged = pending
+        }
+
+        XCTAssertEqual(staged?.draftVersionID, delivered.version.id)
+        XCTAssertEqual(try database.listDraftVersions(limit: 10).count, 1)
+    }
+
+    /// 自检结果必须随 pending 一起落库；分两步写会出现有 pending 无自检的记录。
+    func testSelfCheckResultIsPersistedWithThePendingVersion() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        XCTAssertEqual(delivered.selfCheck?.flagged_excerpts?.first?.excerpt, "存疑的一句")
+        XCTAssertEqual(
+            delivered.pending.selfCheck?.flagged_excerpts?.first?.excerpt,
+            "存疑的一句",
+            "自检结果必须随 pending 一起交付"
+        )
+    }
+
+    func testMissingExecutorDeliversNothing() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+
+        do {
+            _ = try await workflow.selfCheckAndDeliver(
+                selfCheck: makeSelfCheck(database: database),
+                delivery: makeDelivery()
+            )
+            XCTFail("未配置 executor 必须抛错")
+        } catch WritingWorkflow.WorkflowError.missingExecutor {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(try database.listDraftVersions(limit: 10).isEmpty)
+    }
+
+    private func makeDatabase() throws -> NativeDatabase {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "commit-\(UUID().uuidString).sqlite3")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return try NativeDatabase(databaseURL: url)
+    }
+
+    private func makeSelfCheck(database: NativeDatabase) throws -> WritingWorkflow.SelfCheckRequest {
+        let style = try database.defaultStyle()
+        return .init(
+            context: ContextPackage(
+                stage: "自检",
+                title: "改后标题",
+                summary: "",
+                idea: "",
+                direction: "随笔",
+                outline_excerpt: "",
+                content_excerpt: "改后正文",
+                materials_excerpt: "",
+                selected_topic_title: nil,
+                selected_topic_summary: nil,
+                style_name: style.name,
+                style_brief: "",
+                word_count: 4,
+                paragraph_count: 1,
+                material_count: 0,
+                recent_article_titles: [],
+                recent_training_focus: [],
+                recent_issues: [],
+                genre: style.genre,
+                known_pitfalls: []
+            ),
+            style: style,
+            template: nil,
+            config: ModelConfig(model: "test-model"),
+            apiKey: "fake-key"
+        )
+    }
+
+    private func makeDelivery() -> WritingWorkflow.PendingDelivery {
+        .init(
+            articleID: nil,
+            titleSnapshot: "测试稿",
+            actionTitle: "大纲成稿",
+            note: "已成稿",
+            before: DraftSnapshot(title: "原标题", summary: "", content: "原正文"),
+            after: DraftSnapshot(title: "改后标题", summary: "", content: "改后正文"),
+            usedFallback: false
+        )
+    }
+}
+
+private enum CommitTestFailure: Error {
+    case staleRevision
+}
+
+private final class SelfCheckExecutor: AIWorkflowExecuting {
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        if let result = DraftSelfCheckResult(
+            has_concerns: true,
+            flagged_excerpts: [FlaggedExcerpt(excerpt: "存疑的一句", concern: "缺少来源")],
+            raw_output: nil
+        ) as? Output {
+            return AIRun(
+                result: result, elapsedMS: 2, success: true, error: "",
+                inputSummary: "自检输入", outputSummary: "自检输出"
             )
         }
         return AIRun(
