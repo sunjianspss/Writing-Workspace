@@ -344,6 +344,37 @@ package struct WritingWorkflow {
         }
     }
 
+    package struct TopicsRequest {
+        package var analysis: AnalysisRequest
+        /// 运行记录里的动作名：手动想法是「生成选题」，素材入口是「从素材生成选题」。
+        package var actionTitle: String
+        /// 去重基准：已有选题。
+        package var existingTopics: [Topic]
+        /// 素材入口才有：生成成功后把这条素材标记为已用。
+        package var markIdeaUsedID: Int?
+
+        package init(
+            analysis: AnalysisRequest,
+            actionTitle: String,
+            existingTopics: [Topic],
+            markIdeaUsedID: Int? = nil
+        ) {
+            self.analysis = analysis
+            self.actionTitle = actionTitle
+            self.existingTopics = existingTopics
+            self.markIdeaUsedID = markIdeaUsedID
+        }
+    }
+
+    package struct TopicsOutcome {
+        package var agentRun: AgentRun
+        package var created: [Topic]
+        /// 被判定为重复而没有入库的候选。不是错误，只是要让作者知情（18.5.2）。
+        package var duplicates: [TopicPayload]
+        package var usedFallback: Bool
+        package var error: String
+    }
+
     package struct OutlineRequest {
         package var analysis: AnalysisRequest
         package var topic: TopicPayload
@@ -667,6 +698,54 @@ package struct WritingWorkflow {
         }
     }
 
+    /// 生成选题：去重、入库、标记素材已用、写运行轨迹，全部在**同一个事务**里。
+    ///
+    /// 迁出前这条路径是「先 `createTopics`、再 `markIdeaUsed`、最后 `recordAgentRun`」，
+    /// 三次独立写入。中途失败会留下没有轨迹的选题，或者已标记已用却没生成出选题的素材。
+    /// 顺序和其他切片相反（先写业务事实、后写轨迹），所以更需要事务把它们绑在一起。
+    ///
+    /// 被判定重复的候选不入库，但要随 outcome 返回——作者需要知道过滤掉了什么。
+    package func generateTopics(_ request: TopicsRequest) async throws -> TopicsOutcome {
+        guard let executor else { throw WorkflowError.missingExecutor }
+
+        let run: AIRun<GeneratedTopicsDocument> = await executor.execute(
+            NativeWorkflowCatalog.topics(
+                context: request.analysis.context,
+                style: request.analysis.style,
+                template: request.analysis.template
+            ),
+            config: request.analysis.config,
+            apiKey: request.analysis.apiKey
+        )
+        try Task.checkCancellation()
+
+        let (uniqueTopics, duplicateTopics) = TopicDeduplicator.filterDuplicates(
+            run.result.topics,
+            against: request.existingTopics
+        )
+
+        return try database.withTransaction {
+            let created = try database.createTopics(uniqueTopics)
+            if let ideaID = request.markIdeaUsedID {
+                _ = try database.markIdeaUsed(id: ideaID, used: true)
+            }
+            let agentRun = try recordSingleStepRun(
+                actionTitle: request.actionTitle,
+                summary: "生成 \(created.count) 个选题，过滤 \(duplicateTopics.count) 个重复选题。",
+                request: request.analysis,
+                run: run,
+                stepName: "生成选题"
+            )
+            return TopicsOutcome(
+                agentRun: agentRun,
+                created: created,
+                duplicates: duplicateTopics,
+                usedFallback: !run.success,
+                error: run.error
+            )
+        }
+    }
+
     /// 生成大纲：产出大纲与运行轨迹。
     ///
     /// `validateBeforeCommit` 在**任何数据库写入之前**运行。生成期间作者可能已经
@@ -816,11 +895,14 @@ package struct WritingWorkflow {
 
     /// 单步工作流的运行轨迹写入。调用失败一律记为 `fallback` 并保留错误原文——
     /// 运行记录必须能区分「模型给的」和「本地兜底的」。
+    /// `stepName` 默认与动作名一致；只有素材入口例外——动作名是「从素材生成选题」，
+    /// 而步骤名仍是「生成选题」。
     private func recordSingleStepRun<Output>(
         actionTitle: String,
         summary: String,
         request: AnalysisRequest,
-        run: AIRun<Output>
+        run: AIRun<Output>,
+        stepName: String? = nil
     ) throws -> AgentRun {
         try database.saveAgentRun(
             runType: actionTitle,
@@ -835,7 +917,7 @@ package struct WritingWorkflow {
             error: run.error,
             steps: [
                 AgentRunPayloads.singleStep(
-                    name: actionTitle,
+                    name: stepName ?? actionTitle,
                     success: run.success,
                     elapsedMS: run.elapsedMS,
                     inputSummary: run.inputSummary,
