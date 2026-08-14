@@ -52,6 +52,8 @@ printf '%s\n' \
   '        _ = NativeWorkflowCatalog.outline(topic: fixture)' \
   '        _ = NativeWorkflowCatalog.topics(context: fixture)' \
   '        _ = try database.createTopics(fixture)' \
+  '        _ = NativeWorkflowCatalog.draftSelfCheck(context: fixture)' \
+  '        _ = NativeWorkflowCatalog.draft(topic: fixture)' \
   '    }' \
   '}' \
   > "$SRC_DIR/Stores/WorkshopStore+Fixture.swift"
@@ -96,7 +98,9 @@ for forbidden in \
   'database.savePublishAssets' \
   'NativeWorkflowCatalog.outline' \
   'NativeWorkflowCatalog.topics' \
-  'database.createTopics'
+  'database.createTopics' \
+  'NativeWorkflowCatalog.draftSelfCheck' \
+  'NativeWorkflowCatalog.draft('
 do
   if ! grep -Fq "$forbidden" "$violation_output"; then
     echo "FAIL: guard diagnostic did not identify the injected violation: $forbidden" >&2

@@ -49,43 +49,35 @@ extension WorkshopStore {
         selfCheckContext.summary = after.summary
         selfCheckContext.content_excerpt = after.content
         selfCheckContext.word_count = after.content.count
-        let selfCheckResponse = await executeWorkflow(
-            NativeWorkflowCatalog.draftSelfCheck(
+
+        // 自检与 pending 落库都归工作流——与 `polish` 走同一条路径。
+        let (version, pending, _) = try await writingWorkflow.selfCheckAndDeliver(
+            selfCheck: .init(
                 context: selfCheckContext,
                 style: style,
-                template: promptTemplate(for: .draftSelfCheck)
+                template: promptTemplate(for: .draftSelfCheck),
+                config: currentModelConfig,
+                apiKey: apiKeyInput
+            ),
+            delivery: .init(
+                articleID: articleID,
+                titleSnapshot: titleSnapshot,
+                actionTitle: actionTitle,
+                note: usedFallback ? failureNote : successNote,
+                before: before,
+                after: after,
+                usedFallback: usedFallback,
+                matchedPitfalls: style.known_pitfalls ?? [],
+                agentTrace: agentTrace,
+                retrievedFragments: retrievedFragments,
+                sectionFragmentContexts: sectionFragmentContexts,
+                iterationSummary: iterationSummary,
+                candidateJudgement: candidateJudgement,
+                styleSamples: lastStyleSampleProvenance
             )
-        ).draftSelfCheckResponse
-        if Task.isCancelled {
-            throw CancellationError()
-        }
-
-        let note = usedFallback ? failureNote : successNote
-        let outcome = try writingWorkflow.execute(.deliverPending(.init(
-            articleID: articleID,
-            titleSnapshot: titleSnapshot,
-            actionTitle: actionTitle,
-            note: note,
-            before: before,
-            after: after,
-            usedFallback: usedFallback,
-            selfCheck: selfCheckResponse.result,
-            matchedPitfalls: style.known_pitfalls ?? [],
-            agentTrace: agentTrace,
-            retrievedFragments: retrievedFragments,
-            sectionFragmentContexts: sectionFragmentContexts,
-            iterationSummary: iterationSummary,
-            candidateJudgement: candidateJudgement,
-            styleSamples: lastStyleSampleProvenance
-        )))
-        guard case let .pendingDelivered(version, pending) = outcome else {
-            preconditionFailure("WritingWorkflow returned an invalid pending outcome")
-        }
-        do {
+        )
+        try writingWorkflow.commitPending(version: version, pending: pending) { pending in
             try writingSession.stage(pending, expectedRevision: expectedRevision)
-        } catch {
-            _ = try? writingWorkflow.execute(.cleanupPending(versionID: version.id))
-            throw error
         }
         if let tags = result.tags {
             draftTags = tags
