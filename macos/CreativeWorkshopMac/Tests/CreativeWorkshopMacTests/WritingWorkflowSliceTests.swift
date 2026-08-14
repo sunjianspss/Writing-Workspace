@@ -1412,6 +1412,64 @@ final class WritingWorkflowCommitPendingTests: XCTestCase {
         XCTAssertEqual(try database.listDraftVersions(limit: 10).count, 1)
     }
 
+    /// 回收成功时抛出的必须仍是原始投影错误——那才是作者要处理的那个。
+    func testSuccessfulCleanupStillThrowsTheOriginalProjectionError() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        do {
+            try workflow.commitPending(version: delivered.version, pending: delivered.pending) { _ in
+                throw CommitTestFailure.staleRevision
+            }
+            XCTFail("投影失败必须抛出")
+        } catch CommitTestFailure.staleRevision {
+            // 预期：回收成功，原始错误原样抛出。
+        } catch {
+            XCTFail("回收成功时不应改写错误类型，实际抛出：\(error)")
+        }
+    }
+
+    /// 回收本身也失败时，必须报出遗留的版本号——否则库里那条孤儿记录对作者不可见。
+    func testFailedCleanupSurfacesBothTheProjectionErrorAndTheOrphanedVersion() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        // 让回收无从下手：删掉它要操作的表。
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE draft_versions", nil, nil, nil), SQLITE_OK)
+
+        do {
+            try workflow.commitPending(version: delivered.version, pending: delivered.pending) { _ in
+                throw CommitTestFailure.staleRevision
+            }
+            XCTFail("投影与回收都失败时必须抛出")
+        } catch let WritingWorkflow.WorkflowError.pendingCleanupFailed(versionID, projection, _) {
+            XCTAssertEqual(versionID, delivered.version.id, "必须指名遗留的是哪个版本")
+            XCTAssertTrue(
+                projection is CommitTestFailure,
+                "原始投影错误必须被保留，而不是被回收失败盖掉"
+            )
+            let message = try XCTUnwrap(
+                (WritingWorkflow.WorkflowError.pendingCleanupFailed(
+                    versionID: versionID,
+                    projection: projection,
+                    cleanup: CommitTestFailure.staleRevision
+                ) as LocalizedError).errorDescription
+            )
+            XCTAssertTrue(message.contains("#\(delivered.version.id)"), "错误文案要带上版本号：\(message)")
+        }
+    }
+
     /// 自检结果必须随 pending 一起落库；分两步写会出现有 pending 无自检的记录。
     func testSelfCheckResultIsPersistedWithThePendingVersion() async throws {
         let database = try makeDatabase()

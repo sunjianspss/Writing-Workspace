@@ -15,7 +15,9 @@ jobs:
   macos:
     name: macOS tests and ad-hoc artifact
     runs-on: macos-15
-    timeout-minutes: 45
+    # 正常 2~3 分钟。45 分钟曾让一次 runner 级挂起白烧 45 分钟 × 2 个 runner；
+    # 15 分钟仍留 5 倍余量，挂起时代价降到十五分之一。
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository

@@ -11,6 +11,10 @@ package struct WritingWorkflow {
         case missingExecutor
         /// 模型返回了空替换文本。改写不能拿空串去覆盖正文，只能整体放弃。
         case emptyRewriteReplacement
+        /// 投影失败后连回收也失败：数据库里留下了一个界面看不见、作者也无法
+        /// 确认或放弃的待复核版本。两个错误都要报——投影错误说明发生了什么，
+        /// 版本号说明库里还剩什么。
+        case pendingCleanupFailed(versionID: Int, projection: Error, cleanup: Error)
 
         package var errorDescription: String? {
             switch self {
@@ -18,6 +22,11 @@ package struct WritingWorkflow {
                 "WritingWorkflow 未配置 AI executor"
             case .emptyRewriteReplacement:
                 "模型没有返回可替换文本"
+            case let .pendingCleanupFailed(versionID, projection, cleanup):
+                """
+                \(projection.localizedDescription)；\
+                回收候选也失败，数据库中遗留待复核版本 #\(versionID)（\(cleanup.localizedDescription)）
+                """
             }
         }
     }
@@ -1036,8 +1045,9 @@ package struct WritingWorkflow {
     ///
     /// `stage` 由调用方提供，因为投影目标（`WritingSession`）不属于本层。
     ///
-    /// 残留风险：回收本身失败时无处上报，仍会留下孤儿 pending 行。这里保持既有语义
-    /// ——原始的投影错误才是作者需要看到的那个，优先把它抛出去。
+    /// 回收成功时抛出的仍是原始的投影错误——那才是作者需要处理的那个。只有回收
+    /// 本身也失败时才换成 `pendingCleanupFailed`：这时库里留下了一个界面看不见、
+    /// 也无法确认或放弃的版本，瞒着作者比多一条错误信息更糟。
     package func commitPending(
         version: DraftVersion,
         pending: PendingDraftReview,
@@ -1046,7 +1056,15 @@ package struct WritingWorkflow {
         do {
             try stage(pending)
         } catch {
-            _ = try? execute(.cleanupPending(versionID: version.id))
+            do {
+                _ = try execute(.cleanupPending(versionID: version.id))
+            } catch let cleanupError {
+                throw WorkflowError.pendingCleanupFailed(
+                    versionID: version.id,
+                    projection: error,
+                    cleanup: cleanupError
+                )
+            }
             throw error
         }
     }
