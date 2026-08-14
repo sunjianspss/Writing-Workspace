@@ -28,7 +28,12 @@ jobs:
       - name: Verify and package
         env:
           BUILD_NUMBER: ${{ github.run_number }}
-        run: ./script/package_release.sh
+        # 看门狗只观察不干预：到点给测试进程拍调用栈打进本步骤日志，不杀进程、
+        # 永远以 0 退出。用于取证 testEveryKeyIsCovered 在 runner 上的稳定挂起
+        # （本地无论脏树还是干净 checkout 都复现不了）。兜底仍是 timeout-minutes。
+        run: |
+          ./script/ci_hang_watchdog.sh 420 180 &
+          ./script/package_release.sh
 
       - name: Upload verified artifact
         uses: actions/upload-artifact@v4
