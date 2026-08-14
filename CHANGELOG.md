@@ -25,6 +25,7 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Topic generation moved into a `WritingWorkflow` slice. Creating topics, marking the source material used, and recording the run trace were three separate writes; they now commit together, so a failure can no longer leave topics without a trace or material marked used with nothing to show for it.
 - Draft self-check and pending delivery are now one workflow step, and the compensating cleanup that runs when a delivered candidate fails to reach the editor lives in one place instead of two hand-copied blocks. A candidate that cannot be shown is reliably removed rather than left in the database as a pending version the author can neither confirm nor discard.
 - Outline-to-draft generation moved into a `WritingWorkflow` slice, completing the migration: `WorkshopStore` no longer invokes any AI workflow directly.
+- The app ships an icon. It is drawn programmatically so the 16- and 32-pixel variants can be simplified rather than shrunk, and both the development and release bundles now carry it; the release validator rejects a bundle whose icon file is missing.
 
 ### Fixed
 

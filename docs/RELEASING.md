@@ -41,17 +41,16 @@ Every artifact must contain:
 - a valid deep, strict code signature after resources are copied;
 - a readable versioned ZIP and matching SHA-256 checksum.
 
-`script/check_release.sh --self-test <app>` proves the validator rejects a mutated bundle with missing version metadata.
+`script/check_release.sh --self-test <app>` proves the validator rejects two mutated bundles: one with missing version metadata, and one whose `AppIcon.icns` was deleted and the bundle re-signed. The re-signing matters—without it that case would fail on the broken signature and prove nothing about the icon gate.
 
 ## Public-release gates not yet implemented
 
 Before distributing outside trusted development channels:
 
-1. Add the production `.icns` asset and `CFBundleIconFile` metadata.
-2. Configure a Developer ID Application identity outside the repository.
-3. Sign with hardened runtime and explicit entitlements.
-4. Submit to Apple's notarization service and staple the ticket.
-5. Verify Gatekeeper assessment on a clean supported macOS installation.
-6. Record the release notes and immutable checksum.
+1. Configure a Developer ID Application identity outside the repository.
+2. Sign with hardened runtime and explicit entitlements.
+3. Submit to Apple's notarization service and staple the ticket.
+4. Verify Gatekeeper assessment on a clean supported macOS installation.
+5. Record the release notes and immutable checksum.
 
 Secrets, certificates and notarization credentials must never be committed. CI should receive them from protected secret storage only after the public-release workflow is deliberately introduced.

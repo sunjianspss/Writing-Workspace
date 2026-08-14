@@ -43,6 +43,15 @@ if [[ -d "$RESOURCE_BUNDLE" ]]; then
   /usr/bin/ditto "$RESOURCE_BUNDLE" "$APP_RESOURCES/$(basename "$RESOURCE_BUNDLE")"
 fi
 
+# 图标资产随仓库入库（由 script/generate_app_icon.swift 生成）。开发构建与正式
+# 打包是两条独立的 bundle 组装路径，两边都要拷，否则会出现"开发时有图标、
+# 打包出来没有"。
+APP_ICON_SOURCE="$PACKAGE_DIR/Resources/AppIcon.icns"
+if [[ -f "$APP_ICON_SOURCE" ]]; then
+  mkdir -p "$APP_RESOURCES"
+  cp "$APP_ICON_SOURCE" "$APP_RESOURCES/AppIcon.icns"
+fi
+
 APP_VERSION="0.0.0"
 if [[ -f "$VERSION_FILE" ]]; then
   APP_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
@@ -56,6 +65,8 @@ cat >"$INFO_PLIST" <<PLIST
 <dict>
   <key>CFBundleExecutable</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>

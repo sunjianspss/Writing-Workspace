@@ -48,6 +48,21 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "negative self-test failed: a bundle without CFBundleVersion was accepted"
   fi
 
+  # 第二组：plist 键还在，但图标文件被删。
+  #
+  # 删文件会破坏签名，而校验器也查签名——若不重新签名，这一组无论有没有图标
+  # 断言都会失败，等于在测签名而不是测图标。所以删完必须重签，让"缺图标"成为
+  # 这个包唯一的缺陷。
+  icon_missing_app="$self_test_dir/icon-missing.app"
+  /usr/bin/ditto "$source_app" "$icon_missing_app"
+  rm -f "$icon_missing_app/Contents/Resources/AppIcon.icns"
+  /usr/bin/codesign --force --deep --sign - --timestamp=none "$icon_missing_app" >/dev/null 2>&1 \
+    || fail "negative self-test setup failed: could not re-sign the icon-missing bundle"
+
+  if "$SCRIPT_PATH" "$icon_missing_app" >/dev/null 2>&1; then
+    fail "negative self-test failed: a bundle whose AppIcon.icns is missing was accepted"
+  fi
+
   echo "release check: negative self-test passed"
   exit 0
 fi
@@ -67,9 +82,14 @@ package_type="$(plist_value "$info_plist" CFBundlePackageType)" || fail "missing
 minimum_system="$(plist_value "$info_plist" LSMinimumSystemVersion)" || fail "missing LSMinimumSystemVersion"
 release_version="$(plist_value "$info_plist" CFBundleShortVersionString)" || fail "missing CFBundleShortVersionString"
 build_number="$(plist_value "$info_plist" CFBundleVersion)" || fail "missing CFBundleVersion"
+icon_file="$(plist_value "$info_plist" CFBundleIconFile)" || fail "missing CFBundleIconFile"
 
 [[ "$executable_name" == "$APP_NAME" ]] || fail "unexpected executable name: $executable_name"
 [[ "$identifier" == "$BUNDLE_ID" ]] || fail "unexpected bundle identifier: $identifier"
+
+# 光有 plist 键不算数：图标文件真的在包里才叫有图标。
+[[ "$icon_file" == "AppIcon" ]] || fail "unexpected icon file: $icon_file"
+require_file "$app_bundle/Contents/Resources/$icon_file.icns"
 [[ "$package_type" == "APPL" ]] || fail "unexpected package type: $package_type"
 [[ "$minimum_system" == "13.0" ]] || fail "unexpected minimum macOS version: $minimum_system"
 if ! [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then

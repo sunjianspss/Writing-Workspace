@@ -113,10 +113,19 @@ chmod +x "$app_binary"
 # WorkshopResourceBundle resolver uses this conventional location first.
 /usr/bin/ditto "$build_resource_bundle" "$app_resources/$RESOURCE_BUNDLE_NAME"
 
+# 图标资产：与 build_and_run.sh 走同一份源文件，避免两条路径产出不一致的包。
+app_icon_source="$PACKAGE_DIR/Resources/AppIcon.icns"
+if [[ ! -f "$app_icon_source" ]]; then
+  echo "ERROR: 缺少图标资产 ${app_icon_source} — 用 script/generate_app_icon.swift 生成" >&2
+  exit 1
+fi
+cp "$app_icon_source" "$app_resources/AppIcon.icns"
+
 /usr/bin/plutil -create xml1 "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string zh_CN" "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_DISPLAY_NAME" "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $APP_NAME" "$info_plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" "$info_plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_DISPLAY_NAME" "$info_plist"
