@@ -1097,3 +1097,222 @@ private final class OutlineExecutor: AIWorkflowExecuting {
         )
     }
 }
+
+/// 生成选题纵切片（24.18）。这条路径与其他切片相反：先写业务事实、后写轨迹，
+/// 迁出前是三次独立写入，所以事务是它的核心约束。
+@MainActor
+final class WritingWorkflowTopicsTests: XCTestCase {
+    func testTopicsAreCreatedAndDuplicatesReportedWithoutBeingStored() async throws {
+        let database = try makeDatabase()
+        let existing = try database.createTopics([payload(title: "已有选题")])
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: TopicsExecutor(titles: ["已有选题", "全新选题"])
+        )
+
+        let outcome = try await workflow.generateTopics(
+            makeRequest(database: database, existingTopics: existing)
+        )
+
+        XCTAssertEqual(outcome.created.map(\.title), ["全新选题"])
+        XCTAssertEqual(outcome.duplicates.map(\.title), ["已有选题"])
+        XCTAssertEqual(try database.listTopics().count, 2, "重复候选不得入库")
+        XCTAssertEqual(outcome.agentRun.summary, "生成 1 个选题，过滤 1 个重复选题。")
+    }
+
+    /// 轨迹写入失败时，选题必须随同一事务回滚——不能留下没有轨迹的选题。
+    func testRunTraceFailureRollsBackTheCreatedTopics() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: TopicsExecutor(titles: ["新选题"])
+        )
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE agent_runs", nil, nil, nil), SQLITE_OK)
+
+        do {
+            _ = try await workflow.generateTopics(makeRequest(database: database, existingTopics: []))
+            XCTFail("轨迹表缺失时必须抛错")
+        } catch {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(
+            try database.listTopics().isEmpty,
+            "运行轨迹写入失败时，已创建的选题必须随事务回滚"
+        )
+    }
+
+    /// 素材入口：标记已用与选题、轨迹在同一事务里，不能出现"标记已用却没生成选题"。
+    func testIdeaIsMarkedUsedInsideTheSameTransaction() async throws {
+        let database = try makeDatabase()
+        let idea = try database.saveIdea(
+            id: nil,
+            payload: IdeaSaveRequest(
+                title: "一条素材",
+                content: "素材正文",
+                type: "灵感",
+                tags: [],
+                used: 0,
+                related_article_id: nil
+            )
+        )
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: TopicsExecutor(titles: ["由素材生成"])
+        )
+
+        _ = try await workflow.generateTopics(
+            makeRequest(
+                database: database,
+                existingTopics: [],
+                actionTitle: "从素材生成选题",
+                markIdeaUsedID: idea.id
+            )
+        )
+
+        XCTAssertEqual(try database.listIdeas().first(where: { $0.id == idea.id })?.used, 1)
+    }
+
+    /// 素材入口的运行记录：动作名是「从素材生成选题」，但步骤名仍是「生成选题」。
+    func testIdeaEntryKeepsItsOwnActionTitleButSharedStepName() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(
+            database: database,
+            executor: TopicsExecutor(titles: ["由素材生成"])
+        )
+
+        let outcome = try await workflow.generateTopics(
+            makeRequest(
+                database: database,
+                existingTopics: [],
+                actionTitle: "从素材生成选题"
+            )
+        )
+
+        XCTAssertEqual(outcome.agentRun.run_type, "从素材生成选题")
+        XCTAssertEqual(outcome.agentRun.steps.first?.name, "生成选题")
+    }
+
+    func testMissingExecutorWritesNothing() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+
+        do {
+            _ = try await workflow.generateTopics(makeRequest(database: database, existingTopics: []))
+            XCTFail("未配置 executor 必须抛错")
+        } catch WritingWorkflow.WorkflowError.missingExecutor {
+            // 预期负向路径。
+        }
+
+        XCTAssertTrue(try database.listTopics().isEmpty)
+        XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
+    }
+
+    private func makeDatabase() throws -> NativeDatabase {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "topics-\(UUID().uuidString).sqlite3")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return try NativeDatabase(databaseURL: url)
+    }
+
+    private func payload(title: String) -> TopicPayload {
+        TopicPayload(
+            title: title,
+            direction: "随笔",
+            core_viewpoint: nil,
+            target_reader: nil,
+            description: nil,
+            angle: nil,
+            emotion: nil,
+            score: 3,
+            status: "待写",
+            tags: ["随笔"]
+        )
+    }
+
+    private func makeRequest(
+        database: NativeDatabase,
+        existingTopics: [Topic],
+        actionTitle: String = "生成选题",
+        markIdeaUsedID: Int? = nil
+    ) throws -> WritingWorkflow.TopicsRequest {
+        let style = try database.defaultStyle()
+        return .init(
+            analysis: .init(
+                articleID: nil,
+                titleSnapshot: "测试稿",
+                context: ContextPackage(
+                    stage: "选题",
+                    title: "",
+                    summary: "",
+                    idea: "一个想法",
+                    direction: "随笔",
+                    outline_excerpt: "",
+                    content_excerpt: "",
+                    materials_excerpt: "",
+                    selected_topic_title: nil,
+                    selected_topic_summary: nil,
+                    style_name: style.name,
+                    style_brief: "",
+                    word_count: 0,
+                    paragraph_count: 0,
+                    material_count: 0,
+                    recent_article_titles: [],
+                    recent_training_focus: [],
+                    recent_issues: [],
+                    genre: style.genre,
+                    known_pitfalls: []
+                ),
+                style: style,
+                template: nil,
+                config: ModelConfig(model: "test-model"),
+                apiKey: "fake-key"
+            ),
+            actionTitle: actionTitle,
+            existingTopics: existingTopics,
+            markIdeaUsedID: markIdeaUsedID
+        )
+    }
+}
+
+private final class TopicsExecutor: AIWorkflowExecuting {
+    private let titles: [String]
+
+    init(titles: [String]) {
+        self.titles = titles
+    }
+
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        let payloads = titles.map { title in
+            TopicPayload(
+                title: title,
+                direction: "随笔",
+                core_viewpoint: nil,
+                target_reader: nil,
+                description: nil,
+                angle: nil,
+                emotion: nil,
+                score: 3,
+                status: "待写",
+                tags: ["随笔"]
+            )
+        }
+        if let result = GeneratedTopicsDocument(topics: payloads) as? Output {
+            return AIRun(
+                result: result, elapsedMS: 3, success: true, error: "",
+                inputSummary: "选题输入", outputSummary: "选题输出"
+            )
+        }
+        return AIRun(
+            result: descriptor.fallback(), elapsedMS: 1, success: false,
+            error: "unexpected workflow", inputSummary: "", outputSummary: ""
+        )
+    }
+}

@@ -87,52 +87,26 @@ extension WorkshopStore {
 
     func generateTopicsFromIdea(_ idea: Idea) async {
         await run("从素材生成选题", cancellable: true) {
-            let style = try self.resolveStyle()
             let seed = idea.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             let input = seed?.isEmpty == false ? seed! : String(idea.content.prefix(60))
-            var context = self.currentWritingContext(style: style)
-            context.idea = input
-            context.direction = self.normalizedDirection
-            context.materials_excerpt = idea.content
-            context.material_count = 1
-            let result = await self.executeWorkflow(
-                NativeWorkflowCatalog.topics(
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .topics)
+            var analysis = try self.analysisRequest(template: .topics)
+            analysis.context.idea = input
+            analysis.context.direction = self.normalizedDirection
+            analysis.context.materials_excerpt = idea.content
+            analysis.context.material_count = 1
+
+            let outcome = try await self.writingWorkflow.generateTopics(
+                WritingWorkflow.TopicsRequest(
+                    analysis: analysis,
+                    actionTitle: "从素材生成选题",
+                    existingTopics: self.topics,
+                    markIdeaUsedID: idea.id
                 )
-            ).topicsResult
-            try Task.checkCancellation()
-            let (uniqueTopics, duplicateTopics) = TopicDeduplicator.filterDuplicates(result.payloads, against: self.topics)
-            let created = try self.database.createTopics(uniqueTopics)
-            _ = try self.database.markIdeaUsed(id: idea.id, used: true)
-            try self.recordAgentRun(
-                runType: "从素材生成选题",
-                status: result.success ? "success" : "fallback",
-                summary: "生成 \(created.count) 个选题，过滤 \(duplicateTopics.count) 个重复选题。",
-                elapsedMS: result.elapsedMS,
-                inputSummary: result.inputSummary,
-                outputSummary: result.outputSummary,
-                error: result.error,
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "生成选题",
-                        success: result.success,
-                        elapsedMS: result.elapsedMS,
-                        inputSummary: result.inputSummary,
-                        outputSummary: result.outputSummary,
-                        error: result.error
-                    )
-                ]
             )
+            self.projectAgentRun(outcome.agentRun)
+
             self.ideas = try self.database.listIdeas()
-            self.topics = try self.database.listTopics()
-            self.lastFilteredDuplicateTopics = duplicateTopics
-            if let firstTopic = created.first {
-                self.useTopic(firstTopic)
-            }
-            self.stats = try self.database.overviewStats()
-            self.statusText = self.topicsGeneratedStatusText(created: created.count, duplicates: duplicateTopics.count)
+            self.projectGeneratedTopics(outcome)
         }
     }
 
@@ -161,6 +135,20 @@ extension WorkshopStore {
         }
     }
 
+    /// 两条选题路径共用的投影：入库结果、被过滤的重复、选用第一条、刷新统计与状态。
+    private func projectGeneratedTopics(_ outcome: WritingWorkflow.TopicsOutcome) {
+        topics = (try? database.listTopics()) ?? topics
+        lastFilteredDuplicateTopics = outcome.duplicates
+        if let firstTopic = outcome.created.first {
+            useTopic(firstTopic)
+        }
+        stats = try? database.overviewStats()
+        statusText = topicsGeneratedStatusText(
+            created: outcome.created.count,
+            duplicates: outcome.duplicates.count
+        )
+    }
+
     func generateTopics() async {
         guard !ideaInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusText = "请先输入想法"
@@ -168,47 +156,20 @@ extension WorkshopStore {
         }
 
         await run("生成选题", cancellable: true) {
-            let style = try self.resolveStyle()
-            var context = self.currentWritingContext(style: style)
-            context.idea = self.ideaInput
-            context.direction = self.normalizedDirection
-            context.materials_excerpt = self.materials
-            let result = await self.executeWorkflow(
-                NativeWorkflowCatalog.topics(
-                    context: context,
-                    style: style,
-                    template: self.promptTemplate(for: .topics)
+            var analysis = try self.analysisRequest(template: .topics)
+            analysis.context.idea = self.ideaInput
+            analysis.context.direction = self.normalizedDirection
+            analysis.context.materials_excerpt = self.materials
+
+            let outcome = try await self.writingWorkflow.generateTopics(
+                WritingWorkflow.TopicsRequest(
+                    analysis: analysis,
+                    actionTitle: "生成选题",
+                    existingTopics: self.topics
                 )
-            ).topicsResult
-            try Task.checkCancellation()
-            let (uniqueTopics, duplicateTopics) = TopicDeduplicator.filterDuplicates(result.payloads, against: self.topics)
-            let created = try self.database.createTopics(uniqueTopics)
-            try self.recordAgentRun(
-                runType: "生成选题",
-                status: result.success ? "success" : "fallback",
-                summary: "生成 \(created.count) 个选题，过滤 \(duplicateTopics.count) 个重复选题。",
-                elapsedMS: result.elapsedMS,
-                inputSummary: result.inputSummary,
-                outputSummary: result.outputSummary,
-                error: result.error,
-                steps: [
-                    AgentRunPayloads.singleStep(
-                        name: "生成选题",
-                        success: result.success,
-                        elapsedMS: result.elapsedMS,
-                        inputSummary: result.inputSummary,
-                        outputSummary: result.outputSummary,
-                        error: result.error
-                    )
-                ]
             )
-            self.topics = try self.database.listTopics()
-            self.lastFilteredDuplicateTopics = duplicateTopics
-            if let firstTopic = created.first {
-                self.useTopic(firstTopic)
-            }
-            self.stats = try self.database.overviewStats()
-            self.statusText = self.topicsGeneratedStatusText(created: created.count, duplicates: duplicateTopics.count)
+            self.projectAgentRun(outcome.agentRun)
+            self.projectGeneratedTopics(outcome)
         }
     }
 

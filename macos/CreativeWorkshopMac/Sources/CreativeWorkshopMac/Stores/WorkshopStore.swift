@@ -767,8 +767,9 @@ final class WorkshopStore: ObservableObject {
         }
     }
 
-    /// 只读分析类工作流的共同请求装配。
-    private func analysisRequest(template key: PromptTemplateKey) throws -> WritingWorkflow.AnalysisRequest {
+    /// 只读分析类工作流的共同请求装配。多个 Store 扩展文件共用，故为 internal——
+    /// 与 `recordAgentRun` / `resolveStyle` 同级的共享基础设施。
+    func analysisRequest(template key: PromptTemplateKey) throws -> WritingWorkflow.AnalysisRequest {
         let style = try resolveStyle()
         return WritingWorkflow.AnalysisRequest(
             articleID: selectedArticleID,
@@ -901,8 +902,8 @@ final class WorkshopStore: ObservableObject {
         )
     }
 
-    /// 运行记录已由工作流落库，Store 只把它投影到列表顶部。
-    private func projectAgentRun(_ run: AgentRun) {
+    /// 运行记录已由工作流落库，Store 只把它投影到列表顶部。跨扩展文件共用。
+    func projectAgentRun(_ run: AgentRun) {
         agentRuns = [run] + agentRuns.filter { $0.id != run.id }
     }
 
