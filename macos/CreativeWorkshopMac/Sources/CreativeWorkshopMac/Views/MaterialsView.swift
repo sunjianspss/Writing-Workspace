@@ -86,6 +86,7 @@ struct MaterialsView: View {
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
         .padding(20)

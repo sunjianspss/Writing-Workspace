@@ -107,7 +107,7 @@ struct ArticlesView: View {
             }
             .padding(WorkshopMetrics.stackSpacing)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background, in: RoundedRectangle(cornerRadius: WorkshopMetrics.controlCornerRadius))
+            .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: WorkshopMetrics.controlCornerRadius))
             .overlay(
                 RoundedRectangle(cornerRadius: WorkshopMetrics.controlCornerRadius)
                     .stroke(

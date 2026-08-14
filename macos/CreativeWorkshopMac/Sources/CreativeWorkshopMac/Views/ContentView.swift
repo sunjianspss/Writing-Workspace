@@ -34,6 +34,8 @@ struct ContentView: View {
                     onCancel: { store.cancelCurrentOperation() }
                 )
             }
+            // 右列显式刷同一张底色：不刷就落在系统窗口底色上，与左列一深一浅。
+            .background(WorkshopPalette.canvas)
         }
         .onDisappear {
             store.saveAutosaveSnapshot()

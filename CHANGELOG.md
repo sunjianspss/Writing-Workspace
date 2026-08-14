@@ -40,6 +40,9 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Dark themes no longer paste as near-invisible text. Night and Gradient set light headings against a dark ground; because the copy path dropped that ground, the headings landed on white at 1.1:1 and 1.0:1 contrast.
 - Themes whose ground is a translucent colour (Halloween, Christmas) now paste a flattened opaque equivalent, so an editor that discards alpha cannot turn a ten-percent orange tint into solid orange.
 - The three poetry themes now paste their own paper. Gilded and Moonlight previously inherited the original Poetry theme's warm ground, which turned Moonlight's cool white amber.
+- Both columns now paint the same canvas colour. The content column had been left on the system window background, so it read white next to the navigation column's warm grey in Light, and — because macOS tints window backgrounds with the desktop wallpaper — noticeably lighter than the navigation column in Dark. Dark now sits at the lighter of the two, with dividers, row states, and tertiary text lifted one step to keep their contrast.
+- Cards paint an explicit surface colour instead of the SwiftUI semantic background, which the same wallpaper tinting turned blue against the warm canvas in Dark. Every card in the app now shares one fill: neutral black in Dark, white in Light.
+- The process hero and the current-topic block dropped their accent-colour washes. Accent is reserved for actions and states, and a wash that large read as a blue slab in Dark; both are now ordinary cards, and blocks nested inside a card step back to the canvas tone instead of a translucent fill that disappeared once the card stopped being tinted.
 
 ### Verification
 

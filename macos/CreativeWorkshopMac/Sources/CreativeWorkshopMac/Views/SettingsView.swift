@@ -337,6 +337,7 @@ struct SettingsView: View {
                 content()
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
         }
         .frame(maxWidth: WorkshopMetrics.settingsContentMaxWidth)
         .frame(maxWidth: .infinity)

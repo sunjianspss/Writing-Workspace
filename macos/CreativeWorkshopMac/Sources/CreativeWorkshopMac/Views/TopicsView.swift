@@ -99,7 +99,7 @@ struct TopicsView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            topic.id == store.selectedTopicID ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor),
+            topic.id == store.selectedTopicID ? Color.accentColor.opacity(0.12) : WorkshopPalette.surface,
             in: RoundedRectangle(cornerRadius: 10)
         )
     }

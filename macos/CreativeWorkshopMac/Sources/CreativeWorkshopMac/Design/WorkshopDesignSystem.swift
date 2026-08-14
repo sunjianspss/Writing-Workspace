@@ -55,16 +55,26 @@ enum WorkshopAppearance: String, CaseIterable, Identifiable {
 /// 每个 token 都是随外观解析的动态色，所以「跟随系统 / 浅色 / 深色」三种设置
 /// 都成立——不是把深色硬编码进视图。
 ///
+/// `canvas` 是两列共用的底色：左列和右列都显式刷它，两边就不会再一深一浅
+/// （右列原先落在系统窗口底色上，深色下还会被壁纸染色）。浅色取原导航列的暖灰，
+/// 深色取原右列那一档亮度——底色抬高后，分隔线与行状态在深色下同步上移一档。
+///
+/// `surface` 是卡片填充，也必须是显式值：卡片原先刷 SwiftUI 的 `.background`，
+/// 而那个语义色在深色下会被桌面壁纸染色，于是卡片泛蓝、和暖调底色打架。深色取
+/// 中性黑（原发布物料卡片那一档），浅色取白——白卡片在暖灰底上正好浮起来。
+///
 /// 选中态是抬高的中性面而不是强调色：强调色只留给动作与状态，琥珀只表示草稿，
 /// 红色只表示待复核计数。语义色在浅色下取更深的变体，保证对比度。
 enum WorkshopPalette {
-    static let navBackground = adaptive(light: 0xF5F3F1, dark: 0x141312)
-    static let navDivider = adaptive(light: 0xE3E0DC, dark: 0x262423)
-    static let rowHover = adaptive(light: 0xEAE7E3, dark: 0x2A2827)
-    static let rowSelected = adaptive(light: 0xDCD8D2, dark: 0x33302E)
+    static let canvas = adaptive(light: 0xF5F3F1, dark: 0x2A2827)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x1E1E1E)
+    static let navDivider = adaptive(light: 0xE3E0DC, dark: 0x3A3735)
+    static let rowHover = adaptive(light: 0xEAE7E3, dark: 0x35322F)
+    static let rowSelected = adaptive(light: 0xDCD8D2, dark: 0x403C39)
     static let textPrimary = adaptive(light: 0x1C1B1A, dark: 0xEDEDEA)
     static let textSecondary = adaptive(light: 0x5E5A55, dark: 0x9A9793)
-    static let textTertiary = adaptive(light: 0x8A8580, dark: 0x6B6865)
+    /// 深色下随底色一起抬高：留在原来的 0x6B6865 会跌到 2.6:1。
+    static let textTertiary = adaptive(light: 0x8A8580, dark: 0x807C78)
     static let draft = adaptive(light: 0x9A6710, dark: 0xD9A441)
     static let published = adaptive(light: 0x2C6E3B, dark: 0x5FA96A)
     static let attention = adaptive(light: 0xA82D28, dark: 0xD9635F)
@@ -266,7 +276,7 @@ struct WorkshopOperationStatusBar: View {
         }
         .padding(.horizontal, WorkshopMetrics.stackSpacing)
         .frame(maxWidth: .infinity, minHeight: WorkshopMetrics.statusBarHeight)
-        .background(WorkshopPalette.navBackground)
+        .background(WorkshopPalette.canvas)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(WorkshopPalette.navDivider)
