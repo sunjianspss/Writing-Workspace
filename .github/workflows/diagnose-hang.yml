@@ -1,0 +1,84 @@
+name: Diagnose test hang
+
+# 临时诊断 workflow：定位 testEveryKeyIsCovered 在 runner 上的挂起范围。
+# 结论出来后应当删除——它不是长期 CI 的一部分。
+#
+# 已知：主线程停在 XCTWaiter._synchronouslyWaitForTimeInterval，即 XCTest 把这个
+# 同步测试当异步测试等待完成信号。现在要分清是「只有这一个测试触发」还是
+# 「整套 XCTest 都会中招」。
+
+on:
+  push:
+    branches:
+      - fix/pending-cleanup-visibility
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolate:
+    name: 逐个隔离运行
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 环境信息
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: 预先构建测试（不计入各用例耗时）
+        run: swift build --build-tests --disable-sandbox --package-path macos/CreativeWorkshopMac
+
+      - name: 分组运行
+        run: |
+          set -uo pipefail
+
+          # macOS 没有 GNU timeout：自己起一个杀手进程限时。
+          run_limited() {
+            local label="$1" limit="$2" filter="$3"
+            echo "::group::$label"
+            local start=$(date +%s)
+
+            swift test --disable-sandbox --package-path macos/CreativeWorkshopMac \
+              ${filter:+--filter "$filter"} > "/tmp/$label.log" 2>&1 &
+            local pid=$!
+            ( sleep "$limit"; kill -9 "$pid" 2>/dev/null ) &
+            local killer=$!
+
+            wait "$pid"; local rc=$?
+            kill "$killer" 2>/dev/null || true
+
+            local elapsed=$(( $(date +%s) - start ))
+            if [[ "$rc" -eq 0 ]]; then
+              echo "结果：通过（${elapsed}s）"
+            elif [[ "$elapsed" -ge "$limit" ]]; then
+              echo "结果：★挂起★ 被限时 ${limit}s 杀掉"
+            else
+              echo "结果：失败 rc=$rc（${elapsed}s）"
+            fi
+            tail -5 "/tmp/$label.log"
+            echo "::endgroup::"
+          }
+
+          # 1) 只跑挂起的那一个测试：单独跑会不会挂？
+          run_limited single-test 240 "CreativeWorkshopMacTests.PromptTemplateSingleSourceTests/testEveryKeyIsCovered"
+
+          # 2) 跑它所在的整个套件：是套件内前序测试留下的状态导致的吗？
+          run_limited whole-suite 240 "CreativeWorkshopMacTests.PromptTemplateSingleSourceTests"
+
+          # 3) 对照组：一个完全无关的套件。如果它也挂，说明是 XCTest 整体问题。
+          run_limited control-suite 240 "CreativeWorkshopMacTests.WritingWorkflowSliceTests"
+
+          # 4) 全量：确认在本次 runner 上挂起确实可复现（不可复现的话前三条都不算数）
+          run_limited full-suite 480 ""
+
+          echo "=== 汇总 ==="
+          grep -h "结果：" /tmp/*.log 2>/dev/null || true
