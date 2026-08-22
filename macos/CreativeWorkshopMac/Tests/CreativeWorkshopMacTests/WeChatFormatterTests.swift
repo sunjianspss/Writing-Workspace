@@ -42,7 +42,7 @@ final class WeChatFormatterTests: XCTestCase {
         XCTAssertTrue(html.contains("function preprocessWechatCopyContainer(rootEl)"))
         XCTAssertTrue(html.contains("DOMPurify.sanitize"))
 
-        XCTAssertEqual(WeChatFormatterTheme.all.count, 19)
+        XCTAssertEqual(WeChatFormatterTheme.all.count, 20)
         XCTAssertEqual(Set(WeChatFormatterTheme.all.map(\.id)).count, WeChatFormatterTheme.all.count)
         for theme in WeChatFormatterTheme.all {
             XCTAssertTrue(html.contains("            \(theme.id): {"), "资源中缺少主题：\(theme.id)")

@@ -1054,6 +1054,46 @@ hr { border: none; text-align: center; margin: 2.5em 0; }
 hr::before { content: "◆ ◆ ◆"; color: #c9a86c; font-size: 0.8em; letter-spacing: 1em; }`
             },
 
+            brocade: {
+                name: '织锦典藏',
+                icon: '🏮',
+                desc: '中式框线',
+                css: `#preview-container {
+    font-family: "Songti SC", "Noto Serif SC", "STSong", Georgia, serif;
+    font-size: 16.5px;
+    line-height: 1.95;
+    color: #3a322a;
+    letter-spacing: 0.012em;
+    padding: 28px 20px 40px;
+    background-color: #faf6ee;
+    background-image: repeating-linear-gradient(90deg, rgba(150,126,92,0.045) 0 1px, transparent 1px 8px);
+}
+h1 { font-size: 20px; font-weight: 600; line-height: 1.7; letter-spacing: 0.05em; text-align: center; color: #3a2f26; margin: 0 0 1.6em; padding: 22px 16px; border: 1px solid #c4b091; box-shadow: inset 0 0 0 3px #faf6ee, inset 0 0 0 4px #d5c6aa; }
+h2 { font-size: 16.5px; font-weight: 600; color: #3a2f26; letter-spacing: 0.04em; margin: 2.2em 0 1.1em; padding-bottom: 10px; border-bottom: 1px solid #dccdb4; }
+h2::before { content: "■"; color: #2f5d62; font-size: 0.8em; margin-right: 8px; }
+h3 { font-size: 16px; font-weight: 600; color: #2f5d62; letter-spacing: 0.04em; margin: 1.8em 0 0.8em; }
+p { margin: 0 0 1.05em; text-align: justify; }
+strong { color: #9c4a3c; font-weight: 600; }
+em { color: #2f5d62; font-style: normal; border-bottom: 1px solid #c3d3d4; }
+mark { background: #f5e3e0; color: #9c4a3c; padding: 1px 4px; }
+blockquote { font-family: "Kaiti SC", "STKaiti", "KaiTi", serif; font-size: 16.5px; line-height: 2.05; letter-spacing: 0.08em; color: #2f5d62; background: #ecf0ef; border: none; border-top: 1px solid #c3d3d4; border-bottom: 1px solid #c3d3d4; padding: 18px 16px; margin: 1.8em 0; }
+blockquote p:last-child { margin-bottom: 0; }
+code { background: #e9efef; padding: 2px 6px; border-radius: 2px; color: #2f5d62; font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.88em; }
+pre { background: #2e2a24; color: #ece3d4; padding: 16px; border-radius: 2px; margin: 1.6em 0; overflow-x: auto; }
+pre code { background: none; color: inherit; padding: 0; }
+ul, ol { padding-left: 1.8em; margin: 1.2em 0; }
+li { margin: 0.5em 0; }
+li::marker { color: #a8423a; }
+a { color: #2f5d62; text-decoration: none; border-bottom: 1px solid #c3d3d4; }
+img { max-width: 100%; margin: 1.6em 0; padding: 4px; background: #fffdf8; border: 1px solid #dccdb4; }
+hr { border: none; text-align: center; margin: 2.6em 0; }
+hr::before { content: "◆"; color: #a8423a; font-size: 12px; }
+table { width: 100%; border-collapse: collapse; margin: 1.4em 0; font-size: 15px; }
+th, td { border: 1px solid #dccdb4; padding: 9px 12px; }
+th { background: #ecf0ef; color: #2f5d62; font-weight: 600; }
+.katex-display { margin: 1.4em 0; overflow-x: auto; }`
+            },
+
             tech: {
                 name: '科技极客',
                 icon: '🚀',
@@ -3679,18 +3719,24 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             const currentTheme = localStorage.getItem('wxArticleTheme') || 'default';
             const isPoetryTheme = currentTheme.startsWith('poetry');
             const isTechTheme = currentTheme === 'tech';
-            activeWechatCopyMode = isTechTheme ? 'tech' : (isPoetryTheme ? 'poetry' : 'default');
+            const isBrocadeTheme = currentTheme === 'brocade';
+            activeWechatCopyMode = isTechTheme ? 'tech' : (isPoetryTheme ? 'poetry' : (isBrocadeTheme ? 'brocade' : 'default'));
             
             // 基础字体样式
-            const baseFont = isPoetryTheme 
+            const baseFont = isPoetryTheme
                 ? '"STFangsong", "FangSong", "SimSun", serif'
-                : '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif';
+                : (isBrocadeTheme
+                    ? '"Songti SC", "Noto Serif SC", "STSong", "SimSun", Georgia, serif'
+                    : '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif');
             
             // 诗歌主题使用更宽松的行距和居中对齐，并添加信纸泛黄背景
             // 使用渐变背景，如果不支持则使用纯色后备（#faf5f0 是渐变的中间色）
             let baseStyle = `font-family:${baseFont};font-size:16px;color:#333;line-height:1.8;padding:5px;`;
             if (isPoetryTheme) {
                 baseStyle = `font-family:${baseFont};font-size:18px;color:#4a4a4a;line-height:2.5;padding:40px 20px;text-align:center;background-color:#faf5f0;background-image:linear-gradient(180deg, #fefcf8 0%, #f8f3eb 50%, #fef9f3 100%);`;
+            } else if (isBrocadeTheme) {
+                // 竖纹底：公众号不支持 background-image 时退回 background-color 的宣纸色
+                baseStyle = `font-family:${baseFont};font-size:16.5px;color:#3a322a;line-height:1.95;letter-spacing:0.012em;padding:28px 20px 40px;background-color:#faf6ee;background-image:repeating-linear-gradient(90deg, rgba(150,126,92,0.045) 0 1px, transparent 1px 8px);`;
             } else if (isTechTheme) {
                 baseStyle = `font-family:${baseFont};font-size:16px;color:#334155;line-height:1.85;padding:8px;background-color:#ffffff;`;
             }
@@ -3719,6 +3765,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             const tag = el.tagName.toLowerCase();
             const computed = window.getComputedStyle(el);
             const isTechTheme = copyMode === 'tech';
+            const isBrocadeTheme = copyMode === 'brocade';
             
             // 获取关键样式
             const getStyle = (props) => {
@@ -3750,6 +3797,10 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         const h1Color = rgbToHex(computed.color) || '#8b4513';
                         style = `font-size:26px;font-weight:normal;color:${h1Color};margin:1.5em 0 1em;letter-spacing:0.3em;text-align:center;`;
                         content = `◆ ${processChildren(el, isPoetryTheme)} ◆`;
+                    } else if (isBrocadeTheme) {
+                        // 双线框用「外 h1 边框 + 内 section 边框」实现；box-shadow 在公众号编辑器里不可靠
+                        style = `font-size:20px;font-weight:600;line-height:1.7;letter-spacing:0.05em;text-align:center;color:#3a2f26;margin:0 0 1.6em;padding:4px;border:1px solid #c4b091;`;
+                        content = `<section style="border:1px solid #d5c6aa;padding:20px 14px;">${processChildren(el, isPoetryTheme)}</section>`;
                     } else if (isTechTheme) {
                         style = `font-size:28px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.9em;padding:18px 18px 16px;background-color:#111827;border-bottom:3px solid #64748b;border-radius:10px;`;
                         content = processChildren(el, isPoetryTheme);
@@ -3765,6 +3816,9 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         const h2Color = rgbToHex(computed.color) || '#6b4423';
                         style = `font-size:20px;font-weight:normal;color:${h2Color};margin:1.5em 0 0.8em;text-align:center;`;
                         content = `〖 ${processChildren(el, isPoetryTheme)} 〗`;
+                    } else if (isBrocadeTheme) {
+                        style = `font-size:16.5px;font-weight:600;color:#3a2f26;letter-spacing:0.04em;margin:2.2em 0 1.1em;padding-bottom:10px;border-bottom:1px solid #dccdb4;`;
+                        content = `<span style="color:#2f5d62;font-size:0.8em;margin-right:8px;">■</span>${processChildren(el, isPoetryTheme)}`;
                     } else if (isTechTheme) {
                         style = `font-size:22px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.75em;padding:12px 16px;border-left:5px solid #38bdf8;background-color:#123044;border-radius:0 8px 8px 0;`;
                         content = processChildren(el, isPoetryTheme);
@@ -3779,6 +3833,8 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         // 诗歌主题：居中对齐
                         const h3Color = rgbToHex(computed.color) || '#8b6914';
                         style = `font-size:17px;font-weight:normal;color:${h3Color};margin:1.2em 0 0.6em;text-align:center;`;
+                    } else if (isBrocadeTheme) {
+                        style = `font-size:16px;font-weight:600;color:#2f5d62;letter-spacing:0.04em;margin:1.8em 0 0.8em;`;
                     } else if (isTechTheme) {
                         style = `font-size:18px;font-weight:700;color:#334155;margin:1.2em 0 0.6em;padding-left:10px;border-left:3px solid #38bdf8;`;
                     } else {
@@ -3802,6 +3858,12 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     if (isPoetryTheme) {
                         // 诗歌主题：居中对齐，宽松行距
                         style = `margin:1.5em 0;line-height:2.5;text-align:center;letter-spacing:0.15em;`;
+                    } else if (isBrocadeTheme) {
+                        // 引用块最后一段去掉下外边距，否则块内上下留白不对称
+                        const inQuote = el.parentElement && el.parentElement.tagName.toLowerCase() === 'blockquote';
+                        const quoteTail = inQuote && el === el.parentElement.lastElementChild;
+                        // 引用块内的段落不写死正文色，让它继承 blockquote 的石青
+                        style = `margin:0 0 ${quoteTail ? '0' : '1.05em'};line-height:${inQuote ? '2.05' : '1.95'};${inQuote ? '' : 'color:#3a322a;'}text-align:${pAlign};`;
                     } else if (isTechTheme) {
                         style = `margin:1em 0;line-height:1.9;color:#334155;text-align:${pAlign};`;
                     } else {
@@ -3812,7 +3874,10 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     break;
                     
                 case 'blockquote':
-                    if (isTechTheme) {
+                    if (isBrocadeTheme) {
+                        // font-family 用单引号：这里的 style 不经 escapeHtml，双引号会截断属性
+                        style = `margin:1.8em 0;padding:18px 16px;background-color:#ecf0ef;border-top:1px solid #c3d3d4;border-bottom:1px solid #c3d3d4;color:#2f5d62;font-family:'Kaiti SC','STKaiti','KaiTi',serif;font-size:16.5px;line-height:2.05;letter-spacing:0.08em;`;
+                    } else if (isTechTheme) {
                         style = `margin:1.2em 0;padding:14px 18px;border-left:4px solid #7dd3fc;background-color:#f8fafc;color:#475569;border-radius:0 8px 8px 0;`;
                     } else {
                         const bqBg = rgbToHex(computed.backgroundColor) || '#f8f8f8';
@@ -3841,33 +3906,43 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     }
                     style = isTechTheme
                         ? `background-color:#123044;padding:3px 7px;border-radius:4px;font-family:Consolas,Monaco,monospace;font-size:0.9em;color:#bfdbfe;border:1px solid #3b6478;`
-                        : `background-color:#f5f5f5;padding:2px 6px;border-radius:4px;font-family:Consolas,Monaco,monospace;font-size:0.9em;color:#475569;`;
+                        : (isBrocadeTheme
+                            ? `background-color:#e9efef;padding:2px 6px;border-radius:2px;font-family:Consolas,Monaco,monospace;font-size:0.88em;color:#2f5d62;`
+                            : `background-color:#f5f5f5;padding:2px 6px;border-radius:4px;font-family:Consolas,Monaco,monospace;font-size:0.9em;color:#475569;`);
                     content = escapeHtml(el.textContent);
                     break;
                     
                 case 'strong':
                 case 'b':
-                    const strongColor = isTechTheme ? '#0f766e' : rgbToHex(computed.color);
+                    const strongColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#9c4a3c' : rgbToHex(computed.color));
                     style = `font-weight:bold;color:${strongColor};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
                 case 'em':
                 case 'i':
-                    style = `font-style:italic;color:${isTechTheme ? '#475569' : rgbToHex(computed.color)};`;
+                    style = isBrocadeTheme
+                        ? `font-style:normal;color:#2f5d62;border-bottom:1px solid #c3d3d4;`
+                        : `font-style:italic;color:${isTechTheme ? '#475569' : rgbToHex(computed.color)};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
                 case 'mark':
                     style = isTechTheme
                         ? `background-color:#e6f6fb;padding:2px 6px;border-radius:4px;color:#0f766e;`
-                        : `background-color:#fff3bf;padding:2px 4px;border-radius:3px;color:#2f2f2f;`;
+                        : (isBrocadeTheme
+                            ? `background-color:#f5e3e0;padding:1px 4px;color:#9c4a3c;`
+                            : `background-color:#fff3bf;padding:2px 4px;border-radius:3px;color:#2f2f2f;`);
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
                 case 'a': {
-                    const linkColor = isTechTheme ? '#0f766e' : '#576b95';
-                    style = isTechTheme ? `color:${linkColor};text-decoration:none;border-bottom:1px dashed #99d6d0;` : `color:${linkColor};text-decoration:none;`;
+                    const linkColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#2f5d62' : '#576b95');
+                    style = isTechTheme
+                        ? `color:${linkColor};text-decoration:none;border-bottom:1px dashed #99d6d0;`
+                        : (isBrocadeTheme
+                            ? `color:${linkColor};text-decoration:none;border-bottom:1px solid #c3d3d4;`
+                            : `color:${linkColor};text-decoration:none;`);
                     content = processChildren(el, isPoetryTheme);
                     const href = (el.getAttribute('href') || '').trim();
                     // 页内锚点（脚注跳转）和公众号域内链接原样保留
@@ -3893,7 +3968,9 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     } else {
                         style = isTechTheme
                             ? `margin:0.55em 0;line-height:1.85;color:#334155;`
-                            : `margin:0.5em 0;line-height:1.8;`;
+                            : (isBrocadeTheme
+                                ? `margin:0.5em 0;line-height:1.95;color:#3a322a;`
+                                : `margin:0.5em 0;line-height:1.8;`);
                         content = processChildren(el, isPoetryTheme);
                     }
                     break;
@@ -3901,7 +3978,9 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 case 'table':
                     style = isTechTheme
                         ? `width:100%;border-collapse:collapse;margin:1em 0;font-size:14px;color:#334155;`
-                        : `width:100%;border-collapse:collapse;margin:1em 0;font-size:14px;`;
+                        : (isBrocadeTheme
+                            ? `width:100%;border-collapse:collapse;margin:1.4em 0;font-size:15px;color:#3a322a;`
+                            : `width:100%;border-collapse:collapse;margin:1em 0;font-size:14px;`);
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
@@ -3917,14 +3996,18 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 case 'th':
                     style = isTechTheme
                         ? `border:1px solid #cbd5e1;padding:10px 12px;background-color:#f8fafc;color:#0f766e;font-weight:bold;text-align:left;`
-                        : `border:1px solid #ddd;padding:10px 12px;background-color:#f5f5f5;font-weight:bold;text-align:left;`;
+                        : (isBrocadeTheme
+                            ? `border:1px solid #dccdb4;padding:9px 12px;background-color:#ecf0ef;color:#2f5d62;font-weight:bold;text-align:left;`
+                            : `border:1px solid #ddd;padding:10px 12px;background-color:#f5f5f5;font-weight:bold;text-align:left;`);
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
                 case 'td':
                     style = isTechTheme
                         ? `border:1px solid #e2e8f0;padding:10px 12px;text-align:left;color:#334155;`
-                        : `border:1px solid #ddd;padding:10px 12px;text-align:left;`;
+                        : (isBrocadeTheme
+                            ? `border:1px solid #dccdb4;padding:9px 12px;text-align:left;color:#3a322a;`
+                            : `border:1px solid #ddd;padding:10px 12px;text-align:left;`);
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
@@ -3932,6 +4015,8 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     if (isPoetryTheme) {
                         // 诗歌主题：使用花朵装饰符号
                         return `<p style="margin:2em 0;text-align:center;height:30px;line-height:30px;color:#c9a86c;letter-spacing:0.5em;font-size:14px;">✿ ❀ ✿</p>`;
+                    } else if (isBrocadeTheme) {
+                        return `<p style="margin:2.6em 0;text-align:center;color:#a8423a;font-size:12px;line-height:1;">◆</p>`;
                     } else if (isTechTheme) {
                         return `<hr style="border:none;height:1px;background-color:#cbd5e1;margin:2em 0;">`;
                     } else {
@@ -3951,7 +4036,9 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     const maxWidth = imgStyle.includes('max-width') ? '' : 'max-width:100%;';
                     const imageChrome = isTechTheme
                         ? 'height:auto;display:block;margin:1em auto;border-radius:10px;border:1px solid #cbd5e1;'
-                        : 'height:auto;display:block;margin:1em auto;border-radius:8px;';
+                        : (isBrocadeTheme
+                            ? 'height:auto;display:block;margin:1.6em auto;padding:4px;background-color:#fffdf8;border:1px solid #dccdb4;'
+                            : 'height:auto;display:block;margin:1em auto;border-radius:8px;');
                     return `<img src="${src}" alt="${alt}" style="${escapeHtml(imgStyle + maxWidth + imageChrome)}">`;
                     
                 case 'br':
@@ -4076,6 +4163,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
         // 列表转公众号安全结构：section + 每项一个 p（手动项目符号 + 悬挂缩进）
         function renderListForWechat(listEl, ordered, isPoetryTheme) {
             const isTechTheme = activeWechatCopyMode === 'tech';
+            const isBrocadeTheme = activeWechatCopyMode === 'brocade';
             let idx = 0;
             let itemsHtml = '';
 
@@ -4108,9 +4196,11 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     itemsHtml += `<p style="margin:0.8em 0;line-height:2.5;text-align:center;">❀ ${inlineHtml}</p>`;
                 } else {
                     const hasCheckbox = !!li.querySelector(':scope > input[type="checkbox"]');
-                    const marker = hasCheckbox ? '' : (ordered ? `${idx}.&nbsp;` : '•&nbsp;&nbsp;');
-                    const color = isTechTheme ? 'color:#334155;' : '';
-                    itemsHtml += `<p style="margin:0.4em 0;line-height:${isTechTheme ? '1.85' : '1.8'};${color}padding-left:1.5em;text-indent:-1.5em;">${marker}${inlineHtml}</p>`;
+                    let marker = hasCheckbox ? '' : (ordered ? `${idx}.&nbsp;` : '•&nbsp;&nbsp;');
+                    // 织锦：项目符号用朱砂，和预览里的 li::marker 一致
+                    if (marker && isBrocadeTheme) marker = `<span style="color:#a8423a;">${marker}</span>`;
+                    const color = isTechTheme ? 'color:#334155;' : (isBrocadeTheme ? 'color:#3a322a;' : '');
+                    itemsHtml += `<p style="margin:0.4em 0;line-height:${isTechTheme ? '1.85' : (isBrocadeTheme ? '1.95' : '1.8')};${color}padding-left:1.5em;text-indent:-1.5em;">${marker}${inlineHtml}</p>`;
                 }
                 if (blockHtml) {
                     itemsHtml += `<section style="margin:0 0 0 1.5em;">${blockHtml}</section>`;

@@ -331,6 +331,7 @@ struct WeChatFormatterTheme: Identifiable, Equatable {
         .init(id: "default", name: "默认清新"),
         .init(id: "wechat", name: "微信官方"),
         .init(id: "elegant", name: "优雅古典"),
+        .init(id: "brocade", name: "织锦典藏"),
         .init(id: "tech", name: "科技极客"),
         .init(id: "warm", name: "暖色温馨"),
         .init(id: "minimal", name: "极简留白"),
