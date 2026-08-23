@@ -11,6 +11,7 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Appearance is selectable—Follow System, Light, or Dark—from the navigation column footer or Settings → Advanced.
 - A local author profile (pen name and avatar) identifies the workbench. It is display only: no account, no server, and it never reaches prompts, bylines, or generated output.
 - Settings moved from a separate preferences window into a content-column destination, still reachable with ⌘,.
+- The WeChat formatter gained a Brocade theme (织锦典藏): a paper ground with a fine vertical grain, a double-ruled title frame, seal-green section marks and kaiti quotations. Its copy-to-WeChat output was confirmed by pasting into a live Official Account editor.
 
 ### Changed
 
@@ -26,6 +27,7 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Draft self-check and pending delivery are now one workflow step, and the compensating cleanup that runs when a delivered candidate fails to reach the editor lives in one place instead of two hand-copied blocks. A candidate that cannot be shown is reliably removed rather than left in the database as a pending version the author can neither confirm nor discard.
 - Outline-to-draft generation moved into a `WritingWorkflow` slice, completing the migration: `WorkshopStore` no longer invokes any AI workflow directly.
 - The app ships an icon. It is drawn programmatically so the 16- and 32-pixel variants can be simplified rather than shrunk, and both the development and release bundles now carry it; the release validator rejects a bundle whose icon file is missing.
+- Copy-to-WeChat now carries the selected theme's own ground, type scale, letter spacing and padding into the pasted article. It previously emitted a fixed white ground at 16px regardless of theme, so every theme but three pasted as the same generic article.
 
 ### Fixed
 
@@ -34,10 +36,14 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - New/open article actions now require confirmation before discarding unsaved edits; backgrounding or terminating the app synchronously flushes the recovery snapshot.
 - Discarding a generated candidate now preserves any manual edits made on its preview as a recoverable confirmed version before restoring the original draft.
 - Opening an article or starting a new draft no longer navigates away while the session switch is still awaiting confirmation, which previously showed the target view holding the *previous* draft.
+- Dark themes no longer paste as near-invisible text. Night and Gradient set light headings against a dark ground; because the copy path dropped that ground, the headings landed on white at 1.1:1 and 1.0:1 contrast.
+- Themes whose ground is a translucent colour (Halloween, Christmas) now paste a flattened opaque equivalent, so an editor that discards alpha cannot turn a ten-percent orange tint into solid orange.
+- The three poetry themes now paste their own paper. Gilded and Moonlight previously inherited the original Poetry theme's warm ground, which turned Moonlight's cool white amber.
 
 ### Verification
 
 - Architecture guard self-test injects forbidden Store persistence and polish-orchestration calls and proves the guard rejects them in local and CI verification.
+- WeChat copy colour fallbacks are covered by a test that runs the shipped helper functions in JavaScriptCore: translucent grounds must flatten, light-on-dark must be left alone, and near-white on white must be darkened to at least 3:1.
 
 ### Planned
 
