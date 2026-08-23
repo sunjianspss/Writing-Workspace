@@ -2,15 +2,14 @@ name: Diagnose test hang
 
 # 临时诊断 workflow。结论出来后应当删除——它不是长期 CI 的一部分。
 #
-# 前提已被上一轮实验推翻：原以为是 testEveryKeyIsCovered 这一个测试挂起，
-# 但同一 runner、同一 commit、前后脚跑的两次全量，第一次 5s 通过 319 项，
-# 第二次卡到被 480s 杀掉。同一个 commit 的 push 与 pull_request 两个 Verify
-# 也是一个 2m34s 通过、一个 15m 超时。所以这是 XCTest 层面的竞态，那个测试
-# 大概率只是日志停下来的位置。
+# 已定结论（上一轮）：挂的不是某个测试。8 次连跑 7 通过 1 挂起，挂起停在
+# WorkshopStoreTests，而此前两次停在 PromptTemplateSingleSourceTests；一个是
+# @MainActor 套件一个不是。同 runner 同 commit 前后脚跑也能一次 5s 通过、一次
+# 卡到被杀。镜像相同、内存 23MB、所有线程空闲——是 XCTest 层面的随机竞态。
 #
-# 本轮只问一个问题：连跑 N 次全量，挂起时日志停在哪？
-#   每次都停在同一个测试 → 位置有意义，继续挖那里；
-#   停在随机位置       → 通用竞态，该谈重试策略而不是找"那个测试"。
+# 本轮问题：换新 runner 镜像能不能让它消失？
+# 本地 macOS 26 + Swift 6.3.3 跑 13 次零复现，CI 的 macos-15 是 Xcode 16.4。
+# 两个镜像各跑 10 次全量，比挂起率。不改 verify.yml——先拿到证据再说。
 
 on:
   push:
@@ -23,9 +22,13 @@ permissions:
 
 jobs:
   isolate:
-    name: 逐个隔离运行
-    runs-on: macos-15
-    timeout-minutes: 30
+    name: 连跑全量 (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-latest]
 
     steps:
       - name: Check out repository
@@ -38,6 +41,8 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+          echo "--- 该镜像可用的 Xcode ---"
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "（无）"
 
       - name: 预先构建测试（不计入各用例耗时）
         run: swift build --build-tests --disable-sandbox --package-path macos/CreativeWorkshopMac
@@ -49,7 +54,7 @@ jobs:
           set +e
           set -uo pipefail
 
-          RUNS=8
+          RUNS=10
           LIMIT=150   # 通过只要 5s；150s 足够把挂起认出来，又不至于烧满作业
 
           pass=0
