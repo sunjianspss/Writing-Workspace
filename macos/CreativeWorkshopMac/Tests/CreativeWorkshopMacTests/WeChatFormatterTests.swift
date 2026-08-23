@@ -105,6 +105,49 @@ final class WeChatFormatterTests: XCTestCase {
         try assertValidJavaScript(WeChatFormatterController.bridgeScript)
     }
 
+    /// 复制到公众号时的颜色兜底逻辑是纯函数，直接在 JSContext 里跑真实实现。
+    /// 这三条断言各自对应一个真实修过的故障：
+    /// 1. 半透明底色必须压平成实色——公众号丢掉 alpha 会把 rgba(255,107,0,.1) 渲染成实心橙；
+    /// 2. 深色纸底上的浅色前景不能被"修正"掉，否则暗夜护眼的标题会被压黑；
+    /// 3. 白底上的近白前景必须被压深，否则粘出去就是白底白字。
+    func testWechatCopyColorFallbacksSurviveHostileEditors() throws {
+        let html = try String(contentsOf: WeChatFormatterResource.htmlURL(), encoding: .utf8)
+        let helpers = ["rgbToHex", "flattenColorToHex", "copyContrastRatio", "ensureCopyContrast"]
+        var source = "var activeWechatCopyBg = '#ffffff';\n"
+        for name in helpers {
+            let start = try XCTUnwrap(html.range(of: "        function \(name)("))
+            let end = try XCTUnwrap(html.range(of: "\n        }\n", range: start.lowerBound..<html.endIndex))
+            source += String(html[start.lowerBound..<end.upperBound]) + "\n"
+        }
+
+        let context = try XCTUnwrap(JSContext())
+        context.exceptionHandler = { _, exception in
+            XCTFail("JavaScript 执行错误：\(exception?.toString() ?? "未知错误")")
+        }
+        context.evaluateScript(source)
+        XCTAssertNil(context.exception)
+
+        func evaluate(_ expression: String) throws -> String {
+            let value = try XCTUnwrap(context.evaluateScript(expression))
+            return value.toString() ?? ""
+        }
+
+        // 1. 万圣节/圣诞节的底色是半透明的，必须按叠在白纸上压平
+        XCTAssertEqual(try evaluate("flattenColorToHex('rgba(255, 107, 0, 0.1)')"), "#fff0e6")
+        XCTAssertEqual(try evaluate("flattenColorToHex('rgb(13, 17, 23)')"), "#0d1117")
+
+        // 2. 深色纸底上的浅色标题要原样保留（暗夜护眼 h1 = #f0f6fc）
+        context.evaluateScript("activeWechatCopyBg = '#0d1117';")
+        XCTAssertEqual(try evaluate("ensureCopyContrast('#f0f6fc')"), "#f0f6fc")
+
+        // 3. 白纸底上的近白前景必须被压深到看得清
+        context.evaluateScript("activeWechatCopyBg = '#ffffff';")
+        let rescued = try evaluate("ensureCopyContrast('#f0f6fc')")
+        XCTAssertNotEqual(rescued, "#f0f6fc", "白底上的近白色必须被压深")
+        let ratio = try evaluate("copyContrastRatio('\(rescued)', '#ffffff')")
+        XCTAssertGreaterThanOrEqual(Double(ratio) ?? 0, 3.0, "压深后至少要到 3:1")
+    }
+
     private func assertValidJavaScript(_ script: String) throws {
         let context = try XCTUnwrap(JSContext())
         context.exceptionHandler = { _, exception in

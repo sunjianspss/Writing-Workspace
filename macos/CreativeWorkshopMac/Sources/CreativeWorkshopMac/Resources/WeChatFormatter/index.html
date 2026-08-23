@@ -3714,6 +3714,92 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             return html;
         }
 
+        // 复制时实际生效的纸底色。默认分支从主题读出来后写在这里，
+        // 供 ensureCopyContrast 判断前景色够不够看得清。
+        let activeWechatCopyBg = '#ffffff';
+
+        // 半透明色压平成实色（按叠在白纸上算）。公众号若丢掉 alpha，rgba(255,107,0,0.1)
+        // 会变成实心橙——万圣节/圣诞节的底色就是这种写法，必须先压平再输出。
+        function flattenColorToHex(value) {
+            if (!value) return '';
+            const m = /rgba?\(([^)]+)\)/.exec(value);
+            if (!m) return rgbToHex(value) || (/^#[0-9a-fA-F]{3,6}$/.test(value.trim()) ? value.trim() : '');
+            const parts = m[1].split(',').map(v => parseFloat(v.trim()));
+            if (parts.length < 3 || parts.some(isNaN)) return '';
+            const a = parts.length > 3 ? Math.max(0, Math.min(1, parts[3])) : 1;
+            const flat = parts.slice(0, 3).map(v => Math.round(v * a + 255 * (1 - a)));
+            return '#' + flat.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+        }
+
+        // 把主题容器的「壳」读出来：纸底、内边距、正文色、字号、行距、字距。
+        // 默认分支原先把这些全写死（白底 + #333 + 16px），于是深色主题粘出去
+        // 就是「白底 + 浅色标题」——暗夜护眼的 h1 是 #f0f6fc，对白底 1.1:1，等于隐形。
+        function readThemeShell(container) {
+            const cs = window.getComputedStyle(container);
+            const bgImage = cs.backgroundImage;
+            const hasImage = bgImage && bgImage !== 'none';
+            let bgColor = cs.backgroundColor;
+            const hasColor = bgColor && bgColor !== 'transparent' && bgColor !== 'rgba(0, 0, 0, 0)';
+
+            // 纯渐变背景的 backgroundColor 是透明的，取渐变第一个色标当兜底色：
+            // 公众号若过滤掉 background-image，至少还剩一个方向正确的底色。
+            if (!hasColor && hasImage) {
+                const stop = bgImage.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/);
+                bgColor = stop ? stop[0] : '';
+            }
+            const bgHex = flattenColorToHex(bgColor);
+
+            let decl = '';
+            if (bgHex) decl += `background-color:${bgHex};`;
+            if (hasImage) decl += `background-image:${bgImage};`;
+
+            const px = (v, fallback) => (v && v !== 'normal' && v !== '0px' ? v : fallback);
+            return {
+                decl,
+                bg: bgHex || '#ffffff',
+                color: rgbToHex(cs.color) || '#333',
+                font: cs.fontFamily || '',
+                fontSize: px(cs.fontSize, '16px'),
+                lineHeight: px(cs.lineHeight, '1.8'),
+                letterSpacing: cs.letterSpacing && cs.letterSpacing !== 'normal' ? `letter-spacing:${cs.letterSpacing};` : '',
+                padding: px(cs.padding, '5px')
+            };
+        }
+
+        function copyContrastRatio(a, b) {
+            const toRgb = (h) => {
+                const m = /^#?([0-9a-fA-F]{6})$/.exec(String(h).trim());
+                if (!m) return null;
+                const n = parseInt(m[1], 16);
+                return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+            };
+            const lum = (rgb) => {
+                const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+                return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+            };
+            const x = toRgb(a), y = toRgb(b);
+            if (!x || !y) return 21;
+            const l1 = Math.max(lum(x), lum(y)), l2 = Math.min(lum(x), lum(y));
+            return (l1 + 0.05) / (l2 + 0.05);
+        }
+
+        // 兜底：主题没声明纸底（粘出去就是公众号白底）时，浅色前景会看不见。
+        // 只在「几乎不可读」时才介入并压到刚好可读，避免把设计好的配色改味。
+        function ensureCopyContrast(hex) {
+            if (!hex || copyContrastRatio(hex, activeWechatCopyBg) >= 2) return hex;
+            const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+            if (!m) return hex;
+            const n = parseInt(m[1], 16);
+            let rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+            const darken = copyContrastRatio('#000000', activeWechatCopyBg) > copyContrastRatio('#ffffff', activeWechatCopyBg);
+            for (let i = 0; i < 12; i++) {
+                rgb = rgb.map(v => Math.max(0, Math.min(255, Math.round(darken ? v * 0.82 : v + (255 - v) * 0.18))));
+                const cur = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+                if (copyContrastRatio(cur, activeWechatCopyBg) >= 3) return cur;
+            }
+            return darken ? '#333333' : '#f5f5f5';
+        }
+
         function generateWechatHtml(container) {
             // 获取当前主题
             const currentTheme = localStorage.getItem('wxArticleTheme') || 'default';
@@ -3731,13 +3817,24 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             
             // 诗歌主题使用更宽松的行距和居中对齐，并添加信纸泛黄背景
             // 使用渐变背景，如果不支持则使用纯色后备（#faf5f0 是渐变的中间色）
-            let baseStyle = `font-family:${baseFont};font-size:16px;color:#333;line-height:1.8;padding:5px;`;
+            // 默认分支：把主题自己的纸底/字号/字距/内边距带过去，而不是一律白底 16px。
+            // 这既修好了深色主题（暗夜护眼、渐变流光）粘贴后标题隐形，也让其余主题
+            // 的纸色和字号第一次真正进入公众号。
+            const shell = readThemeShell(container);
+            activeWechatCopyBg = shell.bg;
+            let baseStyle = `font-family:${shell.font || baseFont};font-size:${shell.fontSize};color:${shell.color};line-height:${shell.lineHeight};${shell.letterSpacing}padding:${shell.padding};${shell.decl}`;
             if (isPoetryTheme) {
-                baseStyle = `font-family:${baseFont};font-size:18px;color:#4a4a4a;line-height:2.5;padding:40px 20px;text-align:center;background-color:#faf5f0;background-image:linear-gradient(180deg, #fefcf8 0%, #f8f3eb 50%, #fef9f3 100%);`;
+                // 雅韵/鎏金/月光三套纸底不同（暖、米、冷），原先一律套雅韵的暖纸，
+                // 月光绢帛的冷白会被粘成暖黄。有自己的底就用自己的。
+                const poetryShell = shell.decl || 'background-color:#faf5f0;background-image:linear-gradient(180deg, #fefcf8 0%, #f8f3eb 50%, #fef9f3 100%);';
+                activeWechatCopyBg = shell.bg || '#faf5f0';
+                baseStyle = `font-family:${baseFont};font-size:18px;color:#4a4a4a;line-height:2.5;padding:40px 20px;text-align:center;${poetryShell}`;
             } else if (isBrocadeTheme) {
                 // 竖纹底：公众号不支持 background-image 时退回 background-color 的宣纸色
+                activeWechatCopyBg = '#faf6ee';
                 baseStyle = `font-family:${baseFont};font-size:16.5px;color:#3a322a;line-height:1.95;letter-spacing:0.012em;padding:28px 20px 40px;background-color:#faf6ee;background-image:repeating-linear-gradient(90deg, rgba(150,126,92,0.045) 0 1px, transparent 1px 8px);`;
             } else if (isTechTheme) {
+                activeWechatCopyBg = '#ffffff';
                 baseStyle = `font-family:${baseFont};font-size:16px;color:#334155;line-height:1.85;padding:8px;background-color:#ffffff;`;
             }
             
@@ -3805,7 +3902,8 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         style = `font-size:28px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.9em;padding:18px 18px 16px;background-color:#111827;border-bottom:3px solid #64748b;border-radius:10px;`;
                         content = processChildren(el, isPoetryTheme);
                     } else {
-                        style = `font-size:24px;font-weight:bold;color:${rgbToHex(computed.color)};margin:1.2em 0 0.6em;padding-bottom:8px;border-bottom:2px solid ${rgbToHex(computed.color)};`;
+                        const h1Safe = ensureCopyContrast(rgbToHex(computed.color));
+                        style = `font-size:24px;font-weight:bold;color:${h1Safe};margin:1.2em 0 0.6em;padding-bottom:8px;border-bottom:2px solid ${h1Safe};`;
                         content = processChildren(el, isPoetryTheme);
                     }
                     break;
@@ -3823,7 +3921,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         style = `font-size:22px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.75em;padding:12px 16px;border-left:5px solid #38bdf8;background-color:#123044;border-radius:0 8px 8px 0;`;
                         content = processChildren(el, isPoetryTheme);
                     } else {
-                        style = `font-size:20px;font-weight:bold;color:${rgbToHex(computed.color)};margin:1.2em 0 0.5em;padding-bottom:6px;border-bottom:1px solid #eee;`;
+                        style = `font-size:20px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1.2em 0 0.5em;padding-bottom:6px;border-bottom:1px solid #eee;`;
                         content = processChildren(el, isPoetryTheme);
                     }
                     break;
@@ -3838,7 +3936,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     } else if (isTechTheme) {
                         style = `font-size:18px;font-weight:700;color:#334155;margin:1.2em 0 0.6em;padding-left:10px;border-left:3px solid #38bdf8;`;
                     } else {
-                        style = `font-size:18px;font-weight:bold;color:${rgbToHex(computed.color)};margin:1em 0 0.5em;`;
+                        style = `font-size:18px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1em 0 0.5em;`;
                     }
                     content = processChildren(el, isPoetryTheme);
                     break;
@@ -3848,7 +3946,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 case 'h6':
                     style = isTechTheme
                         ? `font-size:16px;font-weight:bold;color:#334155;margin:1em 0 0.5em;`
-                        : `font-size:16px;font-weight:bold;color:${rgbToHex(computed.color)};margin:1em 0 0.5em;`;
+                        : `font-size:16px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1em 0 0.5em;`;
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
@@ -3868,7 +3966,8 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         style = `margin:1em 0;line-height:1.9;color:#334155;text-align:${pAlign};`;
                     } else {
                         const pIndent = computed.textIndent !== '0px' ? `text-indent:${computed.textIndent};` : '';
-                        style = `margin:1em 0;line-height:1.8;text-align:${pAlign};${pIndent}`;
+                        const pLine = computed.lineHeight && computed.lineHeight !== 'normal' ? computed.lineHeight : '1.8';
+                        style = `margin:1em 0;line-height:${pLine};text-align:${pAlign};${pIndent}`;
                     }
                     content = processChildren(el, isPoetryTheme);
                     break;
@@ -3914,7 +4013,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     
                 case 'strong':
                 case 'b':
-                    const strongColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#9c4a3c' : rgbToHex(computed.color));
+                    const strongColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#9c4a3c' : ensureCopyContrast(rgbToHex(computed.color)));
                     style = `font-weight:bold;color:${strongColor};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
@@ -3923,7 +4022,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 case 'i':
                     style = isBrocadeTheme
                         ? `font-style:normal;color:#2f5d62;border-bottom:1px solid #c3d3d4;`
-                        : `font-style:italic;color:${isTechTheme ? '#475569' : rgbToHex(computed.color)};`;
+                        : `font-style:italic;color:${isTechTheme ? '#475569' : ensureCopyContrast(rgbToHex(computed.color))};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
                     
@@ -4096,7 +4195,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                         const formulaColor = isTechTheme ? '#334155' : '#333';
                         return `<span style="font-style:italic;color:${formulaColor};">${unicodeFormula}</span>`;
                     }
-                    const spanColor = rgbToHex(computed.color);
+                    const spanColor = ensureCopyContrast(rgbToHex(computed.color));
                     const spanBg = computed.backgroundColor !== 'rgba(0, 0, 0, 0)' ? `background-color:${rgbToHex(computed.backgroundColor)};` : '';
                     const spanWeight = computed.fontWeight !== '400' && computed.fontWeight !== 'normal' ? `font-weight:${computed.fontWeight};` : '';
                     // Obsidian 允许在 Markdown 中直接写 HTML，例如 <span style="font-size:12px">，
