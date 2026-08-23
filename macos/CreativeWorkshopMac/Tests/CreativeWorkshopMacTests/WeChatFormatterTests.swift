@@ -142,6 +142,17 @@ final class WeChatFormatterTests: XCTestCase {
         XCTAssertFalse(border.contains("rgba("), "border 简写里的 rgba 必须一并压平")
         XCTAssertTrue(border.hasPrefix("1px solid #"), "压平后应保持 border 简写结构：\(border)")
 
+        // 全透明必须保持透明。压成底色会毁掉多层背景的层叠——网格笔记的格子是两层
+        // 渐变叠加，上层原本透明的部分若变成实心底色，会把下层横线整片盖掉，
+        // 粘到公众号后网格整个消失（真实反馈修过一次）。
+        XCTAssertEqual(try evaluate("flattenWechatAlpha('rgba(0, 0, 0, 0)', '#fefefe')"), "transparent")
+        XCTAssertEqual(
+            try evaluate("flattenWechatAlpha('linear-gradient(rgba(200,200,200,0.1) 1px, rgba(0,0,0,0) 1px)', '#fefefe')")
+                .contains("transparent") ? "保留" : "被压平",
+            "保留",
+            "渐变里的全透明色标必须保留"
+        )
+
         // 不含 alpha 的值必须原样返回，压平不能顺手改写别的东西
         XCTAssertEqual(try evaluate("flattenWechatAlpha('1px solid #dccdb4', '#faf6ee')"), "1px solid #dccdb4")
 

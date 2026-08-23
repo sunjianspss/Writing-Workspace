@@ -3818,6 +3818,10 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 (whole, r, g, b, a) => {
                     const alpha = Math.max(0, Math.min(1, parseFloat(a)));
                     if (!isFinite(alpha)) return whole;
+                    // 全透明必须保持透明。压成底色会毁掉层叠：网格笔记的格子是两层
+                    // 渐变叠加，上层原本透明的部分一旦变成实心底色，就会把下层的横线
+                    // 整片盖掉，网格直接消失。
+                    if (alpha === 0) return 'transparent';
                     const mixed = [r, g, b].map((channel, i) => {
                         const v = Math.round(parseFloat(channel) * alpha + base[i] * (1 - alpha));
                         return Math.max(0, Math.min(255, v));
@@ -3838,7 +3842,11 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 if (/url\s*\(/i.test(value)) return '';
                 if (!/(?:repeating-)?linear-gradient\s*\(/i.test(value)) return '';
             }
-            // 放在最后：此时 value 已完成各属性自己的归一化，只剩把 alpha 压平。
+            // 渐变内部不压平：多层背景里，上层的每个色标该叠在「下层的结果」上，
+            // 而不是叠在页面底色上，按单一底色压平必然算错。而且渐变里的 rgba 就算
+            // 被公众号丢掉 alpha，也只是颜色变浓，不会像压错那样整层糊掉。
+            if (prop === 'background-image') return value;
+            // 其余属性放在最后压平：此时 value 已完成各自的归一化。
             return flattenWechatAlpha(value, getWechatThemeProfile().background);
         }
 
@@ -3912,7 +3920,16 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                 const textClip = computed.getPropertyValue('background-clip') === 'text'
                     || computed.getPropertyValue('-webkit-background-clip') === 'text';
                 const backgroundImage = textClip ? '' : normalizeWechatStyleValue('background-image', computed.backgroundImage);
-                if (backgroundImage) style += `background-image:${backgroundImage};`;
+                if (backgroundImage) {
+                    style += `background-image:${backgroundImage};`;
+                    // 光有 background-image 不够：网格笔记的格子是两层 linear-gradient
+                    // 叠加、靠 background-size:20px 20px 重复出来的。只带图不带尺寸，
+                    // 那两条 1px 线就只在最顶端和最左边各画一次，格子整个消失。
+                    ['background-size', 'background-position', 'background-repeat'].forEach(prop => {
+                        const value = normalizeWechatStyleValue(prop, computed.getPropertyValue(prop));
+                        if (value) style += `${prop}:${value};`;
+                    });
+                }
             }
 
             if (foreground) {
