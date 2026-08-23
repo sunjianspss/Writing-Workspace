@@ -3689,6 +3689,40 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
         // 为微信公众号生成完整内联样式的 HTML
         let activeWechatCopyMode = 'default';
 
+        // 本次复制实际输出的纸底色。对比度兜底必须拿它做参照，而不是色板里的值：
+        // 纯渐变主题的兜底色是从渐变色标推导的（gradient 推出 #667eea），色板里
+        // 写的却是 #fbf7ff，拿错参照会把本来够看的白标题压成灰色，对真实底反而更糟。
+        let activeWechatCopyBg = '#ffffff';
+
+        // 公众号复制安全色板：主题 CSS 负责浏览器预览，这里只提供在渐变、伪元素、
+        // 阴影等被公众号过滤后仍能维持层级与可读性的纯色后备。
+        const WECHAT_THEME_PROFILES = {
+            default: { background: '#ffffff', text: '#333333', accent: '#1f2937', surface: '#f8fafc', border: '#d9dee7', marker: '•' },
+            wechat: { background: '#ffffff', text: '#3f3f3f', accent: '#000000', surface: '#f7f7f7', border: '#d0d7de', marker: '•' },
+            elegant: { background: '#faf8f5', text: '#2c3e50', accent: '#8b4513', surface: '#faf5eb', border: '#c9a86c', marker: '◆' },
+            brocade: { background: '#faf6ee', text: '#3a322a', accent: '#2f5d62', surface: '#ecf0ef', border: '#dccdb4', marker: '•', separator: '◆' },
+            tech: { background: '#1a1a2e', text: '#e0e0e0', accent: '#00d9ff', surface: '#16213e', border: '#386579', marker: '•' },
+            warm: { background: '#fff7eb', text: '#4a4a4a', accent: '#7c4a2d', surface: '#f6eadc', border: '#d8b892', marker: '•' },
+            minimal: { background: '#ffffff', text: '#1a1a1a', accent: '#000000', surface: '#fafafa', border: '#e0e0e0', marker: '•' },
+            academic: { background: '#ffffff', text: '#000000', accent: '#000000', surface: '#f5f5f5', border: '#000000', marker: '•' },
+            night: { background: '#0d1117', text: '#c9d1d9', accent: '#58a6ff', surface: '#161b22', border: '#30363d', marker: '•' },
+            handwriting: { background: '#ffffff', text: '#2c3e50', accent: '#c0392b', surface: '#f2f8fa', border: '#8fc5dd', marker: '•' },
+            poetry: { background: '#faf5f0', text: '#4a4a4a', accent: '#8b4513', surface: '#f5ebe0', border: '#c9a86c', marker: '❀', separator: '✿ ❀ ✿' },
+            poetry_gilded: { background: '#fdf8ee', text: '#3f3a33', accent: '#7a4b12', surface: '#f5ebe0', border: '#c9a86c', marker: '❀', separator: '◆' },
+            poetry_moonlight: { background: '#f7f9ff', text: '#2f3342', accent: '#4338ca', surface: '#eef2ff', border: '#9aa4df', marker: '✦', separator: '✦' },
+            xiaohongshu: { background: '#fffef7', text: '#333333', accent: '#ff2442', surface: '#fff0f3', border: '#ffb6c1', marker: '●' },
+            sticker: { background: '#f0e6d3', text: '#3f3a33', accent: '#d97706', surface: '#fff3c4', border: '#e8c97b', marker: '•' },
+            halloween: { background: '#17121f', text: '#f4e9ff', accent: '#ff8a00', surface: '#2a2036', border: '#7c4d9e', marker: '✦' },
+            christmas: { background: '#fffdf8', text: '#31423a', accent: '#a3272f', surface: '#f2f7f2', border: '#9eaea4', marker: '•' },
+            gradient: { background: '#fbf7ff', text: '#342b44', accent: '#7c3aed', surface: '#f3e8ff', border: '#c4b5fd', marker: '•' },
+            xhs_grid: { background: '#fefefe', text: '#3b3935', accent: '#e65362', surface: '#fff3e8', border: '#e9c9bd', marker: '•' },
+            xhs_doodle: { background: '#fffef7', text: '#343434', accent: '#ff2442', surface: '#fff0f3', border: '#ffb6c1', marker: '🎯' }
+        };
+
+        function getWechatThemeProfile(themeName = activeWechatCopyMode) {
+            return WECHAT_THEME_PROFILES[themeName] || WECHAT_THEME_PROFILES.default;
+        }
+
         // 外链引用收集：公众号会剥掉正文外链的 href（仅 mp.weixin.qq.com 域内链接可保留），
         // 复制时把外链转为「文字+上标[n]」，并在文末生成引用链接列表
         let wechatLinkRefs = [];
@@ -3704,8 +3738,9 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
 
         function buildWechatLinkRefsFooter() {
             if (wechatLinkRefs.length === 0) return '';
-            let html = `<section style="margin-top:2em;padding-top:1em;border-top:1px solid #e5e7eb;font-size:13px;color:#888;text-align:left;">`;
-            html += `<p style="margin:0 0 0.5em;font-weight:bold;color:#666;">引用链接</p>`;
+            const profile = getWechatThemeProfile();
+            let html = `<section style="margin-top:2em;padding-top:1em;border-top:1px solid ${profile.border};font-size:13px;color:${profile.text};text-align:left;">`;
+            html += `<p style="margin:0 0 0.5em;font-weight:bold;color:${profile.accent};">引用链接</p>`;
             wechatLinkRefs.forEach((ref, i) => {
                 const label = ref.text && ref.text !== ref.url ? `${escapeHtml(ref.text)}: ` : '';
                 html += `<p style="margin:0.35em 0;line-height:1.7;word-break:break-all;">[${i + 1}] ${label}${escapeHtml(ref.url)}</p>`;
@@ -3714,135 +3749,25 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             return html;
         }
 
-        // 复制时实际生效的纸底色。默认分支从主题读出来后写在这里，
-        // 供 ensureCopyContrast 判断前景色够不够看得清。
-        let activeWechatCopyBg = '#ffffff';
-
-        // 半透明色压平成实色（按叠在白纸上算）。公众号若丢掉 alpha，rgba(255,107,0,0.1)
-        // 会变成实心橙——万圣节/圣诞节的底色就是这种写法，必须先压平再输出。
-        function flattenColorToHex(value) {
-            if (!value) return '';
-            const m = /rgba?\(([^)]+)\)/.exec(value);
-            if (!m) return rgbToHex(value) || (/^#[0-9a-fA-F]{3,6}$/.test(value.trim()) ? value.trim() : '');
-            const parts = m[1].split(',').map(v => parseFloat(v.trim()));
-            if (parts.length < 3 || parts.some(isNaN)) return '';
-            const a = parts.length > 3 ? Math.max(0, Math.min(1, parts[3])) : 1;
-            const flat = parts.slice(0, 3).map(v => Math.round(v * a + 255 * (1 - a)));
-            return '#' + flat.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
-        }
-
-        // 把主题容器的「壳」读出来：纸底、内边距、正文色、字号、行距、字距。
-        // 默认分支原先把这些全写死（白底 + #333 + 16px），于是深色主题粘出去
-        // 就是「白底 + 浅色标题」——暗夜护眼的 h1 是 #f0f6fc，对白底 1.1:1，等于隐形。
-        function readThemeShell(container) {
-            const cs = window.getComputedStyle(container);
-            const bgImage = cs.backgroundImage;
-            const hasImage = bgImage && bgImage !== 'none';
-            let bgColor = cs.backgroundColor;
-            const hasColor = bgColor && bgColor !== 'transparent' && bgColor !== 'rgba(0, 0, 0, 0)';
-
-            // 纯渐变背景的 backgroundColor 是透明的，取渐变第一个色标当兜底色：
-            // 公众号若过滤掉 background-image，至少还剩一个方向正确的底色。
-            if (!hasColor && hasImage) {
-                const stop = bgImage.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/);
-                bgColor = stop ? stop[0] : '';
-            }
-            const bgHex = flattenColorToHex(bgColor);
-
-            let decl = '';
-            if (bgHex) decl += `background-color:${bgHex};`;
-            if (hasImage) decl += `background-image:${bgImage};`;
-
-            const px = (v, fallback) => (v && v !== 'normal' && v !== '0px' ? v : fallback);
-            return {
-                decl,
-                bg: bgHex || '#ffffff',
-                color: rgbToHex(cs.color) || '#333',
-                font: cs.fontFamily || '',
-                fontSize: px(cs.fontSize, '16px'),
-                lineHeight: px(cs.lineHeight, '1.8'),
-                letterSpacing: cs.letterSpacing && cs.letterSpacing !== 'normal' ? `letter-spacing:${cs.letterSpacing};` : '',
-                padding: px(cs.padding, '5px')
-            };
-        }
-
-        function copyContrastRatio(a, b) {
-            const toRgb = (h) => {
-                const m = /^#?([0-9a-fA-F]{6})$/.exec(String(h).trim());
-                if (!m) return null;
-                const n = parseInt(m[1], 16);
-                return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-            };
-            const lum = (rgb) => {
-                const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-                return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
-            };
-            const x = toRgb(a), y = toRgb(b);
-            if (!x || !y) return 21;
-            const l1 = Math.max(lum(x), lum(y)), l2 = Math.min(lum(x), lum(y));
-            return (l1 + 0.05) / (l2 + 0.05);
-        }
-
-        // 兜底：主题没声明纸底（粘出去就是公众号白底）时，浅色前景会看不见。
-        // 只在「几乎不可读」时才介入并压到刚好可读，避免把设计好的配色改味。
-        function ensureCopyContrast(hex) {
-            if (!hex || copyContrastRatio(hex, activeWechatCopyBg) >= 2) return hex;
-            const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
-            if (!m) return hex;
-            const n = parseInt(m[1], 16);
-            let rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-            const darken = copyContrastRatio('#000000', activeWechatCopyBg) > copyContrastRatio('#ffffff', activeWechatCopyBg);
-            for (let i = 0; i < 12; i++) {
-                rgb = rgb.map(v => Math.max(0, Math.min(255, Math.round(darken ? v * 0.82 : v + (255 - v) * 0.18))));
-                const cur = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
-                if (copyContrastRatio(cur, activeWechatCopyBg) >= 3) return cur;
-            }
-            return darken ? '#333333' : '#f5f5f5';
-        }
-
         function generateWechatHtml(container) {
             // 获取当前主题
-            const currentTheme = localStorage.getItem('wxArticleTheme') || 'default';
-            const isPoetryTheme = currentTheme.startsWith('poetry');
-            const isTechTheme = currentTheme === 'tech';
-            const isBrocadeTheme = currentTheme === 'brocade';
-            activeWechatCopyMode = isTechTheme ? 'tech' : (isPoetryTheme ? 'poetry' : (isBrocadeTheme ? 'brocade' : 'default'));
+            const selectedTheme = currentTheme && themes[currentTheme] ? currentTheme : 'default';
+            const isPoetryTheme = selectedTheme.startsWith('poetry');
+            activeWechatCopyMode = selectedTheme;
+            const profile = getWechatThemeProfile(selectedTheme);
+            const baseStyle = getWechatSafeStyle(container, {
+                fallbackColor: profile.text,
+                fallbackBackground: profile.background,
+                includeBackgroundImage: true,
+                includeBox: true
+            }) + 'box-sizing:border-box;max-width:100%;';
             
-            // 基础字体样式
-            const baseFont = isPoetryTheme
-                ? '"STFangsong", "FangSong", "SimSun", serif'
-                : (isBrocadeTheme
-                    ? '"Songti SC", "Noto Serif SC", "STSong", "SimSun", Georgia, serif'
-                    : '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif');
-            
-            // 诗歌主题使用更宽松的行距和居中对齐，并添加信纸泛黄背景
-            // 使用渐变背景，如果不支持则使用纯色后备（#faf5f0 是渐变的中间色）
-            // 默认分支：把主题自己的纸底/字号/字距/内边距带过去，而不是一律白底 16px。
-            // 这既修好了深色主题（暗夜护眼、渐变流光）粘贴后标题隐形，也让其余主题
-            // 的纸色和字号第一次真正进入公众号。
-            const shell = readThemeShell(container);
-            activeWechatCopyBg = shell.bg;
-            let baseStyle = `font-family:${shell.font || baseFont};font-size:${shell.fontSize};color:${shell.color};line-height:${shell.lineHeight};${shell.letterSpacing}padding:${shell.padding};${shell.decl}`;
-            if (isPoetryTheme) {
-                // 雅韵/鎏金/月光三套纸底不同（暖、米、冷），原先一律套雅韵的暖纸，
-                // 月光绢帛的冷白会被粘成暖黄。有自己的底就用自己的。
-                const poetryShell = shell.decl || 'background-color:#faf5f0;background-image:linear-gradient(180deg, #fefcf8 0%, #f8f3eb 50%, #fef9f3 100%);';
-                activeWechatCopyBg = shell.bg || '#faf5f0';
-                baseStyle = `font-family:${baseFont};font-size:18px;color:#4a4a4a;line-height:2.5;padding:40px 20px;text-align:center;${poetryShell}`;
-            } else if (isBrocadeTheme) {
-                // 竖纹底：公众号不支持 background-image 时退回 background-color 的宣纸色
-                activeWechatCopyBg = '#faf6ee';
-                baseStyle = `font-family:${baseFont};font-size:16.5px;color:#3a322a;line-height:1.95;letter-spacing:0.012em;padding:28px 20px 40px;background-color:#faf6ee;background-image:repeating-linear-gradient(90deg, rgba(150,126,92,0.045) 0 1px, transparent 1px 8px);`;
-            } else if (isTechTheme) {
-                activeWechatCopyBg = '#ffffff';
-                baseStyle = `font-family:${baseFont};font-size:16px;color:#334155;line-height:1.85;padding:8px;background-color:#ffffff;`;
-            }
-            
+            const emittedBg = baseStyle.match(/(?:^|;)\s*background-color:([^;]*)/);
+            activeWechatCopyBg = (emittedBg ? emittedBg[1].trim() : '') || profile.background || '#ffffff';
+
             wechatLinkRefs = [];
 
-            // baseStyle 的 font-family 里带双引号（"STFangsong" 等），必须转义后再塞进
-            // 双引号包裹的 style 属性，否则属性值会在第一个引号处截断，
-            // 后面所有样式（包括背景色/背景图）都会被解析成一堆无效属性而丢失
+            // 统一转义 style 属性，避免 font-family 中的引号截断后续样式。
             let html = `<section style="${escapeHtml(baseStyle)}">`;
 
             // 遍历所有子元素
@@ -3857,383 +3782,431 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             return html;
         }
 
-        // 处理单个元素，生成带内联样式的 HTML
+        const WECHAT_SAFE_INLINE_PROPS = [
+            'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing',
+            'text-align', 'text-indent', 'text-decoration', 'vertical-align', 'color',
+            'margin', 'padding', 'border-top', 'border-right', 'border-bottom', 'border-left',
+            'border-radius', 'word-break', 'overflow-wrap', 'white-space'
+        ];
+
+        function isTransparentWechatValue(value) {
+            return !value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)';
+        }
+
+        // 公众号编辑器可能丢掉 alpha，把 rgba(…) 当成实心色渲染：万圣节 15% 的橙
+        // 会变成纯橙，tech 的半透明边框会变成实线亮边。复制前一律按当前主题的纸底
+        // 把半透明压平成实色——视觉几乎不变，且不再依赖编辑器支持 alpha。
+        //
+        // 必须整串替换而不是只处理纯色字段：实测 tech 主题 22 处 rgba 里，
+        // background-color 只占 4 处，其余 16 处藏在 border-top/right/bottom/left
+        // 的简写值里，还有 1 处在 background-image 的渐变色标里。
+        function hexToRgbTriplet(hex) {
+            const m = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(String(hex || '').trim());
+            if (!m) return null;
+            let h = m[1];
+            if (h.length === 3) h = h.split('').map(c => c + c).join('');
+            const n = parseInt(h, 16);
+            return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+        }
+
+        function flattenWechatAlpha(value, backdrop) {
+            const text = String(value == null ? '' : value);
+            if (text.indexOf('rgba(') === -1) return value;
+            const base = hexToRgbTriplet(backdrop) || [255, 255, 255];
+            return text.replace(
+                /rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/gi,
+                (whole, r, g, b, a) => {
+                    const alpha = Math.max(0, Math.min(1, parseFloat(a)));
+                    if (!isFinite(alpha)) return whole;
+                    const mixed = [r, g, b].map((channel, i) => {
+                        const v = Math.round(parseFloat(channel) * alpha + base[i] * (1 - alpha));
+                        return Math.max(0, Math.min(255, v));
+                    });
+                    return '#' + mixed.map(v => v.toString(16).padStart(2, '0')).join('');
+                }
+            );
+        }
+
+        function normalizeWechatStyleValue(prop, value) {
+            value = String(value || '').trim();
+            if (!value || value === 'none' || value === 'normal' || value === 'auto') return '';
+            if (prop === 'text-align') value = { start: 'left', end: 'right' }[value] || value;
+            if (prop === 'font-family') value = value.replace(/"/g, "'");
+            if (prop.includes('color') && value.startsWith('rgb')) value = rgbToHex(value);
+            if (prop.startsWith('border-') && (/^0px\s/.test(value) || /\snone\s/.test(` ${value} `))) return '';
+            if (prop === 'background-image') {
+                if (/url\s*\(/i.test(value)) return '';
+                if (!/(?:repeating-)?linear-gradient\s*\(/i.test(value)) return '';
+            }
+            // 放在最后：此时 value 已完成各属性自己的归一化，只剩把 alpha 压平。
+            return flattenWechatAlpha(value, getWechatThemeProfile().background);
+        }
+
+        function hasWechatSurface(el) {
+            const computed = window.getComputedStyle(el);
+            if (!isTransparentWechatValue(computed.backgroundColor)) return true;
+            const backgroundImage = computed.backgroundImage || '';
+            const textClip = computed.getPropertyValue('background-clip') === 'text'
+                || computed.getPropertyValue('-webkit-background-clip') === 'text';
+            return !textClip && /(?:repeating-)?linear-gradient\s*\(/i.test(backgroundImage);
+        }
+
+        function copyContrastRatio(a, b) {
+            const rgb = hexToRgbTriplet(a), other = hexToRgbTriplet(b);
+            if (!rgb || !other) return 21;
+            const lum = (c) => {
+                const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+                return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+            };
+            const l1 = Math.max(lum(rgb), lum(other)), l2 = Math.min(lum(rgb), lum(other));
+            return (l1 + 0.05) / (l2 + 0.05);
+        }
+
+        // 只在「几乎不可读」时介入，并且只压到刚好可读，避免把设计好的配色改味。
+        // 这条兜底是有来历的：halloween 此前粘出去正文对比度只有 1.02:1（浅米底
+        // 配浅色字，等于隐形），gradient 的白标题落在浅色兜底底上是 1.06:1。
+        function ensureCopyContrast(hex, background) {
+            if (!hex || copyContrastRatio(hex, background) >= 2) return hex;
+            let rgb = hexToRgbTriplet(hex);
+            if (!rgb) return hex;
+            const darken = copyContrastRatio('#000000', background) > copyContrastRatio('#ffffff', background);
+            for (let i = 0; i < 12; i++) {
+                rgb = rgb.map(v => Math.max(0, Math.min(255, Math.round(darken ? v * 0.82 : v + (255 - v) * 0.18))));
+                const current = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+                if (copyContrastRatio(current, background) >= 3) return current;
+            }
+            return darken ? '#333333' : '#f5f5f5';
+        }
+
+        // 纯渐变背景的 backgroundColor 是透明的。此时兜底色应当从渐变自己的第一个
+        // 色标推导，而不是取色板里手写的值——手写值会和主题 CSS 漂移：gradient 主题
+        // 的标题是纯白，色板却写了浅色 #fbf7ff，渐变一旦被公众号过滤就是白字白底。
+        function deriveGradientFallback(backgroundImage) {
+            if (!backgroundImage || !/(?:repeating-)?linear-gradient\s*\(/i.test(backgroundImage)) return '';
+            const stop = backgroundImage.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/);
+            if (!stop) return '';
+            const hex = rgbToHex(stop[0]);
+            return /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '';
+        }
+
+        function getWechatSafeStyle(el, options = {}) {
+            const computed = window.getComputedStyle(el);
+            const props = options.props || WECHAT_SAFE_INLINE_PROPS;
+            let style = '';
+
+            props.forEach(prop => {
+                const value = normalizeWechatStyleValue(prop, computed.getPropertyValue(prop));
+                if (value) style += `${prop}:${value};`;
+            });
+
+            let foreground = normalizeWechatStyleValue('color', computed.color);
+            if (!foreground || foreground === 'transparent') foreground = options.fallbackColor || '';
+
+            let background = normalizeWechatStyleValue('background-color', computed.backgroundColor);
+            if (!background || background === 'transparent') {
+                background = deriveGradientFallback(computed.backgroundImage) || options.fallbackBackground || '';
+            }
+            if (background) style += `background-color:${background};`;
+
+            if (options.includeBackgroundImage) {
+                const textClip = computed.getPropertyValue('background-clip') === 'text'
+                    || computed.getPropertyValue('-webkit-background-clip') === 'text';
+                const backgroundImage = textClip ? '' : normalizeWechatStyleValue('background-image', computed.backgroundImage);
+                if (backgroundImage) style += `background-image:${backgroundImage};`;
+            }
+
+            if (foreground) {
+                const backdrop = background || options.fallbackBackground || activeWechatCopyBg;
+                foreground = ensureCopyContrast(foreground, backdrop);
+                style = style.replace(/(^|;)color:[^;]*;/, '$1') + `color:${foreground};`;
+            }
+
+            if (options.includeSizing) {
+                ['width', 'max-width', 'height'].forEach(prop => {
+                    const value = normalizeWechatStyleValue(prop, computed.getPropertyValue(prop));
+                    if (value) style += `${prop}:${value};`;
+                });
+            }
+            if (options.includeBox) style += 'box-sizing:border-box;';
+            return style;
+        }
+
+        function decodeWechatPseudoContent(rawContent) {
+            const raw = String(rawContent || '').trim();
+            if (!raw || raw === 'none' || raw === 'normal' || raw === '""' || raw === "''") return '';
+            const quote = raw[0];
+            let text = (quote === '"' || quote === "'") && raw[raw.length - 1] === quote
+                ? raw.slice(1, -1)
+                : raw;
+            return text.replace(/\\A\s?/gi, '\n').replace(/\\([\\"'])/g, '$1').trimEnd();
+        }
+
+        function getWechatPseudo(el, pseudo) {
+            const computed = window.getComputedStyle(el, pseudo);
+            const text = decodeWechatPseudoContent(computed.content);
+            if (!text) return null;
+            const color = normalizeWechatStyleValue('color', computed.color);
+            const size = normalizeWechatStyleValue('font-size', computed.fontSize);
+            const weight = normalizeWechatStyleValue('font-weight', computed.fontWeight);
+            const spacing = normalizeWechatStyleValue('letter-spacing', computed.letterSpacing);
+            const style = `${color ? `color:${color};` : ''}${size ? `font-size:${size};` : ''}${weight ? `font-weight:${weight};` : ''}${spacing ? `letter-spacing:${spacing};` : ''}`;
+            return { text, style };
+        }
+
+        function renderWechatPseudo(pseudo) {
+            if (!pseudo) return '';
+            return `<span style="${escapeHtml(pseudo.style)}">${escapeHtml(pseudo.text)}</span>`;
+        }
+
+        function decorateWechatContent(el, content) {
+            return `${renderWechatPseudo(getWechatPseudo(el, '::before'))}${content}${renderWechatPseudo(getWechatPseudo(el, '::after'))}`;
+        }
+
+        function renderBrocadeTitle(el, content) {
+            const computed = window.getComputedStyle(el);
+            const borderColor = rgbToHex(computed.borderTopColor) || '#b7a68c';
+            const background = rgbToHex(computed.backgroundColor) || '#fbf7ef';
+            const color = rgbToHex(computed.color) || '#59372e';
+            // 字号/内边距/字距一律取主题 CSS 的实际渲染值，不写死。
+            // 上游把它们钉在 24px / 10px 15px，而创作工坊的织锦是 20px / 22px 16px，
+            // 写死会把已在真实公众号验证过的那版悄悄改掉。
+            const fontFamily = (computed.fontFamily || "'Songti SC','STSong','SimSun',serif").replace(/"/g, "'");
+            const innerPadding = computed.padding && computed.padding !== '0px' ? computed.padding : '22px 16px';
+            const outerStyle = `margin:${computed.margin};padding:4px;border:1px solid ${borderColor};background-color:${background};box-sizing:border-box;`;
+            const innerStyle = `padding:${innerPadding};border:1px solid ${borderColor};font-family:${fontFamily};font-size:${computed.fontSize};line-height:${computed.lineHeight};font-weight:${computed.fontWeight};letter-spacing:${computed.letterSpacing};text-align:${computed.textAlign};color:${color};`;
+            return `<section style="${escapeHtml(outerStyle)}"><section style="${escapeHtml(innerStyle)}">${content}</section></section>`;
+        }
+
+        // 处理单个元素，生成只依赖内联样式、且可在公众号过滤后安全降级的 HTML。
         function processElement(el, isPoetryTheme = false, copyMode = activeWechatCopyMode) {
             const tag = el.tagName.toLowerCase();
-            const computed = window.getComputedStyle(el);
-            const isTechTheme = copyMode === 'tech';
-            const isBrocadeTheme = copyMode === 'brocade';
-            
-            // 获取关键样式
-            const getStyle = (props) => {
-                let style = '';
-                props.forEach(([prop, fallback]) => {
-                    let value = computed.getPropertyValue(prop);
-                    if (!value || value === 'none' || value === 'normal' || value === 'auto' || value === 'transparent' || value === 'rgba(0, 0, 0, 0)') {
-                        value = fallback || '';
-                    }
-                    if (value) {
-                        // 简化 rgb 颜色
-                        if (value.startsWith('rgb(')) {
-                            value = rgbToHex(value);
-                        }
-                        style += `${prop}:${value};`;
-                    }
-                });
-                return style;
-            };
-
-            // 根据元素类型生成样式
+            const profile = getWechatThemeProfile(copyMode);
             let style = '';
             let content = '';
-            
+
             switch (tag) {
                 case 'h1':
-                    if (isPoetryTheme) {
-                        // 诗歌主题：添加 ◆ 装饰，居中对齐
-                        const h1Color = rgbToHex(computed.color) || '#8b4513';
-                        style = `font-size:26px;font-weight:normal;color:${h1Color};margin:1.5em 0 1em;letter-spacing:0.3em;text-align:center;`;
-                        content = `◆ ${processChildren(el, isPoetryTheme)} ◆`;
-                    } else if (isBrocadeTheme) {
-                        // 双线框用「外 h1 边框 + 内 section 边框」实现；box-shadow 在公众号编辑器里不可靠
-                        style = `font-size:20px;font-weight:600;line-height:1.7;letter-spacing:0.05em;text-align:center;color:#3a2f26;margin:0 0 1.6em;padding:4px;border:1px solid #c4b091;`;
-                        content = `<section style="border:1px solid #d5c6aa;padding:20px 14px;">${processChildren(el, isPoetryTheme)}</section>`;
-                    } else if (isTechTheme) {
-                        style = `font-size:28px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.9em;padding:18px 18px 16px;background-color:#111827;border-bottom:3px solid #64748b;border-radius:10px;`;
-                        content = processChildren(el, isPoetryTheme);
-                    } else {
-                        const h1Safe = ensureCopyContrast(rgbToHex(computed.color));
-                        style = `font-size:24px;font-weight:bold;color:${h1Safe};margin:1.2em 0 0.6em;padding-bottom:8px;border-bottom:2px solid ${h1Safe};`;
-                        content = processChildren(el, isPoetryTheme);
-                    }
-                    break;
-                    
                 case 'h2':
-                    if (isPoetryTheme) {
-                        // 诗歌主题：添加 〖 〗 装饰，居中对齐
-                        const h2Color = rgbToHex(computed.color) || '#6b4423';
-                        style = `font-size:20px;font-weight:normal;color:${h2Color};margin:1.5em 0 0.8em;text-align:center;`;
-                        content = `〖 ${processChildren(el, isPoetryTheme)} 〗`;
-                    } else if (isBrocadeTheme) {
-                        style = `font-size:16.5px;font-weight:600;color:#3a2f26;letter-spacing:0.04em;margin:2.2em 0 1.1em;padding-bottom:10px;border-bottom:1px solid #dccdb4;`;
-                        content = `<span style="color:#2f5d62;font-size:0.8em;margin-right:8px;">■</span>${processChildren(el, isPoetryTheme)}`;
-                    } else if (isTechTheme) {
-                        style = `font-size:22px;font-weight:700;color:#dbeafe;margin:1.5em 0 0.75em;padding:12px 16px;border-left:5px solid #38bdf8;background-color:#123044;border-radius:0 8px 8px 0;`;
-                        content = processChildren(el, isPoetryTheme);
-                    } else {
-                        style = `font-size:20px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1.2em 0 0.5em;padding-bottom:6px;border-bottom:1px solid #eee;`;
-                        content = processChildren(el, isPoetryTheme);
-                    }
-                    break;
-                    
                 case 'h3':
-                    if (isPoetryTheme) {
-                        // 诗歌主题：居中对齐
-                        const h3Color = rgbToHex(computed.color) || '#8b6914';
-                        style = `font-size:17px;font-weight:normal;color:${h3Color};margin:1.2em 0 0.6em;text-align:center;`;
-                    } else if (isBrocadeTheme) {
-                        style = `font-size:16px;font-weight:600;color:#2f5d62;letter-spacing:0.04em;margin:1.8em 0 0.8em;`;
-                    } else if (isTechTheme) {
-                        style = `font-size:18px;font-weight:700;color:#334155;margin:1.2em 0 0.6em;padding-left:10px;border-left:3px solid #38bdf8;`;
-                    } else {
-                        style = `font-size:18px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1em 0 0.5em;`;
-                    }
-                    content = processChildren(el, isPoetryTheme);
-                    break;
-                    
                 case 'h4':
                 case 'h5':
-                case 'h6':
-                    style = isTechTheme
-                        ? `font-size:16px;font-weight:bold;color:#334155;margin:1em 0 0.5em;`
-                        : `font-size:16px;font-weight:bold;color:${ensureCopyContrast(rgbToHex(computed.color))};margin:1em 0 0.5em;`;
-                    content = processChildren(el, isPoetryTheme);
+                case 'h6': {
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.accent,
+                        fallbackBackground: hasWechatSurface(el) ? profile.surface : '',
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    });
+                    content = decorateWechatContent(el, processChildren(el, isPoetryTheme));
+                    if (copyMode === 'brocade' && tag === 'h1') return renderBrocadeTitle(el, content);
                     break;
-                    
+                }
+
                 case 'p':
-                    // 'start'/'end' 取值公众号编辑器兼容性差，规范化为 left/right
-                    const pAlign = { start: 'left', end: 'right' }[computed.textAlign] || computed.textAlign;
-                    if (isPoetryTheme) {
-                        // 诗歌主题：居中对齐，宽松行距
-                        style = `margin:1.5em 0;line-height:2.5;text-align:center;letter-spacing:0.15em;`;
-                    } else if (isBrocadeTheme) {
-                        // 引用块最后一段去掉下外边距，否则块内上下留白不对称
-                        const inQuote = el.parentElement && el.parentElement.tagName.toLowerCase() === 'blockquote';
-                        const quoteTail = inQuote && el === el.parentElement.lastElementChild;
-                        // 引用块内的段落不写死正文色，让它继承 blockquote 的石青
-                        style = `margin:0 0 ${quoteTail ? '0' : '1.05em'};line-height:${inQuote ? '2.05' : '1.95'};${inQuote ? '' : 'color:#3a322a;'}text-align:${pAlign};`;
-                    } else if (isTechTheme) {
-                        style = `margin:1em 0;line-height:1.9;color:#334155;text-align:${pAlign};`;
-                    } else {
-                        const pIndent = computed.textIndent !== '0px' ? `text-indent:${computed.textIndent};` : '';
-                        const pLine = computed.lineHeight && computed.lineHeight !== 'normal' ? computed.lineHeight : '1.8';
-                        style = `margin:1em 0;line-height:${pLine};text-align:${pAlign};${pIndent}`;
-                    }
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: hasWechatSurface(el) ? profile.surface : '',
+                        includeBackgroundImage: true
+                    });
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
                 case 'blockquote':
-                    if (isBrocadeTheme) {
-                        // font-family 用单引号：这里的 style 不经 escapeHtml，双引号会截断属性
-                        style = `margin:1.8em 0;padding:18px 16px;background-color:#ecf0ef;border-top:1px solid #c3d3d4;border-bottom:1px solid #c3d3d4;color:#2f5d62;font-family:'Kaiti SC','STKaiti','KaiTi',serif;font-size:16.5px;line-height:2.05;letter-spacing:0.08em;`;
-                    } else if (isTechTheme) {
-                        style = `margin:1.2em 0;padding:14px 18px;border-left:4px solid #7dd3fc;background-color:#f8fafc;color:#475569;border-radius:0 8px 8px 0;`;
-                    } else {
-                        const bqBg = rgbToHex(computed.backgroundColor) || '#f8f8f8';
-                        const bqBorder = rgbToHex(computed.borderLeftColor) || '#ddd';
-                        style = `margin:1em 0;padding:12px 20px;border-left:4px solid ${bqBorder};background-color:${bqBg};color:#666;`;
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: profile.surface,
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    });
+                    if (copyMode === 'brocade') {
+                        style = style.replace(/font-family:[^;]+;/, "font-family:'STKaiti','KaiTi',serif;");
                     }
-                    content = processChildren(el, isPoetryTheme);
+                    content = decorateWechatContent(el, processChildren(el, isPoetryTheme));
                     break;
-                    
-                case 'pre': {
-                    // 背景/文字色取自当前主题的实际渲染值，保证与预览一致；
-                    // 内容经 serializeCodeForWechat 保留语法高亮颜色并逐行转 <br>/&nbsp;
-                    let preBg = rgbToHex(computed.backgroundColor);
-                    if (!preBg || preBg === 'transparent') preBg = '#282c34';
-                    let preColor = rgbToHex(computed.color);
-                    if (!preColor || preColor === 'transparent') preColor = '#abb2bf';
-                    const preBorder = isTechTheme ? 'border:1px solid #334155;' : '';
-                    style = `margin:1em 0;padding:16px;background-color:${preBg};color:${preColor};border-radius:8px;${preBorder}overflow-x:auto;font-family:Consolas,Monaco,monospace;font-size:14px;line-height:1.5;`;
+
+                case 'pre':
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: profile.surface,
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    }) + 'overflow-x:auto;';
                     content = serializeCodeForWechat(el).replace(/(<br>)+$/, '');
                     break;
-                }
-                    
+
                 case 'code':
-                    if (el.parentElement.tagName.toLowerCase() === 'pre') {
-                        return escapeHtml(el.textContent);
-                    }
-                    style = isTechTheme
-                        ? `background-color:#123044;padding:3px 7px;border-radius:4px;font-family:Consolas,Monaco,monospace;font-size:0.9em;color:#bfdbfe;border:1px solid #3b6478;`
-                        : (isBrocadeTheme
-                            ? `background-color:#e9efef;padding:2px 6px;border-radius:2px;font-family:Consolas,Monaco,monospace;font-size:0.88em;color:#2f5d62;`
-                            : `background-color:#f5f5f5;padding:2px 6px;border-radius:4px;font-family:Consolas,Monaco,monospace;font-size:0.9em;color:#475569;`);
+                    if (el.parentElement && el.parentElement.tagName.toLowerCase() === 'pre') return escapeHtml(el.textContent);
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.accent,
+                        fallbackBackground: profile.surface,
+                        includeBox: true
+                    });
                     content = escapeHtml(el.textContent);
                     break;
-                    
+
                 case 'strong':
                 case 'b':
-                    const strongColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#9c4a3c' : ensureCopyContrast(rgbToHex(computed.color)));
-                    style = `font-weight:bold;color:${strongColor};`;
-                    content = processChildren(el, isPoetryTheme);
-                    break;
-                    
                 case 'em':
                 case 'i':
-                    style = isBrocadeTheme
-                        ? `font-style:normal;color:#2f5d62;border-bottom:1px solid #c3d3d4;`
-                        : `font-style:italic;color:${isTechTheme ? '#475569' : ensureCopyContrast(rgbToHex(computed.color))};`;
-                    content = processChildren(el, isPoetryTheme);
-                    break;
-                    
                 case 'mark':
-                    style = isTechTheme
-                        ? `background-color:#e6f6fb;padding:2px 6px;border-radius:4px;color:#0f766e;`
-                        : (isBrocadeTheme
-                            ? `background-color:#f5e3e0;padding:1px 4px;color:#9c4a3c;`
-                            : `background-color:#fff3bf;padding:2px 4px;border-radius:3px;color:#2f2f2f;`);
-                    content = processChildren(el, isPoetryTheme);
+                case 'del':
+                case 's':
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.accent,
+                        fallbackBackground: (tag === 'mark' || hasWechatSurface(el)) ? profile.surface : '',
+                        includeBackgroundImage: true
+                    });
+                    content = decorateWechatContent(el, processChildren(el, isPoetryTheme));
                     break;
-                    
+
                 case 'a': {
-                    const linkColor = isTechTheme ? '#0f766e' : (isBrocadeTheme ? '#2f5d62' : '#576b95');
-                    style = isTechTheme
-                        ? `color:${linkColor};text-decoration:none;border-bottom:1px dashed #99d6d0;`
-                        : (isBrocadeTheme
-                            ? `color:${linkColor};text-decoration:none;border-bottom:1px solid #c3d3d4;`
-                            : `color:${linkColor};text-decoration:none;`);
+                    style = getWechatSafeStyle(el, { fallbackColor: profile.accent });
                     content = processChildren(el, isPoetryTheme);
                     const href = (el.getAttribute('href') || '').trim();
-                    // 页内锚点（脚注跳转）和公众号域内链接原样保留
                     if (!href || href.startsWith('#') || /^https?:\/\/mp\.weixin\.qq\.com\//i.test(href)) {
-                        return `<a href="${escapeHtml(href || '#')}" style="${style}">${content}</a>`;
+                        return `<a href="${escapeHtml(href || '#')}" style="${escapeHtml(style)}">${content}</a>`;
                     }
-                    // 其它外链：公众号粘贴后会剥掉 href，转为「文字+上标[n]」+ 文末引用列表
                     const refNo = collectWechatLinkRef(href, el.textContent.trim());
-                    return `<span style="color:${linkColor};">${content}</span><sup style="font-size:0.75em;color:${linkColor};">[${refNo}]</sup>`;
+                    return `<span style="color:${profile.accent};">${content}</span><sup style="font-size:0.75em;color:${profile.accent};">[${refNo}]</sup>`;
                 }
-                    
+
                 case 'ul':
                 case 'ol':
-                    // 公众号编辑器粘贴后会重建原生 ul/li 结构，重建时常把列表项内的
-                    // 加粗等行内元素拆成独立行；改用 section + p + 手动项目符号绕开
                     return renderListForWechat(el, tag === 'ol', isPoetryTheme);
-                    
+
                 case 'li':
-                    if (isPoetryTheme) {
-                        // 诗歌主题：添加 ❀ 装饰，居中对齐
-                        style = `margin:0.8em 0;line-height:2.5;text-align:center;list-style:none;`;
-                        content = `❀ ${processChildren(el, isPoetryTheme)}`;
-                    } else {
-                        style = isTechTheme
-                            ? `margin:0.55em 0;line-height:1.85;color:#334155;`
-                            : (isBrocadeTheme
-                                ? `margin:0.5em 0;line-height:1.95;color:#3a322a;`
-                                : `margin:0.5em 0;line-height:1.8;`);
-                        content = processChildren(el, isPoetryTheme);
-                    }
-                    break;
-                    
-                case 'table':
-                    style = isTechTheme
-                        ? `width:100%;border-collapse:collapse;margin:1em 0;font-size:14px;color:#334155;`
-                        : (isBrocadeTheme
-                            ? `width:100%;border-collapse:collapse;margin:1.4em 0;font-size:15px;color:#3a322a;`
-                            : `width:100%;border-collapse:collapse;margin:1em 0;font-size:14px;`);
+                    style = getWechatSafeStyle(el, { fallbackColor: profile.text });
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
+                case 'table':
+                    style = getWechatSafeStyle(el, { fallbackColor: profile.text, includeBox: true }) + 'width:100%;border-collapse:collapse;';
+                    content = processChildren(el, isPoetryTheme);
+                    break;
+
                 case 'thead':
                 case 'tbody':
-                    content = processChildren(el, isPoetryTheme);
-                    return content;
-                    
                 case 'tr':
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: hasWechatSurface(el) ? profile.surface : '',
+                        includeBackgroundImage: true
+                    });
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
                 case 'th':
-                    style = isTechTheme
-                        ? `border:1px solid #cbd5e1;padding:10px 12px;background-color:#f8fafc;color:#0f766e;font-weight:bold;text-align:left;`
-                        : (isBrocadeTheme
-                            ? `border:1px solid #dccdb4;padding:9px 12px;background-color:#ecf0ef;color:#2f5d62;font-weight:bold;text-align:left;`
-                            : `border:1px solid #ddd;padding:10px 12px;background-color:#f5f5f5;font-weight:bold;text-align:left;`);
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.accent,
+                        fallbackBackground: profile.surface,
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    });
+                    if (!/border-(?:top|right|bottom|left):/.test(style)) style += `border:1px solid ${profile.border};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
                 case 'td':
-                    style = isTechTheme
-                        ? `border:1px solid #e2e8f0;padding:10px 12px;text-align:left;color:#334155;`
-                        : (isBrocadeTheme
-                            ? `border:1px solid #dccdb4;padding:9px 12px;text-align:left;color:#3a322a;`
-                            : `border:1px solid #ddd;padding:10px 12px;text-align:left;`);
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: hasWechatSurface(el) ? profile.background : '',
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    });
+                    if (!/border-(?:top|right|bottom|left):/.test(style)) style += `border:1px solid ${profile.border};`;
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
-                case 'hr':
-                    if (isPoetryTheme) {
-                        // 诗歌主题：使用花朵装饰符号
-                        return `<p style="margin:2em 0;text-align:center;height:30px;line-height:30px;color:#c9a86c;letter-spacing:0.5em;font-size:14px;">✿ ❀ ✿</p>`;
-                    } else if (isBrocadeTheme) {
-                        return `<p style="margin:2.6em 0;text-align:center;color:#a8423a;font-size:12px;line-height:1;">◆</p>`;
-                    } else if (isTechTheme) {
-                        return `<hr style="border:none;height:1px;background-color:#cbd5e1;margin:2em 0;">`;
-                    } else {
-                        return `<hr style="border:none;border-top:1px solid #ddd;margin:2em 0;">`;
+
+                case 'hr': {
+                    const pseudo = getWechatPseudo(el, '::before') || getWechatPseudo(el, '::after');
+                    const marker = pseudo || (profile.separator ? { text: profile.separator, style: `color:${profile.accent};` } : null);
+                    if (marker) {
+                        const markerStyle = `margin:2em 0;text-align:center;line-height:1.8;${marker.style}`;
+                        return `<p style="${escapeHtml(markerStyle)}">${escapeHtml(marker.text)}</p>`;
                     }
-                    
-                case 'img':
+                    style = getWechatSafeStyle(el, { fallbackColor: profile.border, includeBackgroundImage: true });
+                    if (!style.includes('border-top:') && !style.includes('background-color:')) style += `border-top:1px solid ${profile.border};`;
+                    return `<hr style="${escapeHtml(style)}">`;
+                }
+
+                case 'img': {
                     const src = escapeHtml(el.getAttribute('src') || '');
                     const alt = escapeHtml(el.getAttribute('alt') || '');
-                    // 公式图片：保留光栅化时设置的样式（行内公式必须保持 inline-block），不加通用图片装饰
                     if (el.dataset && el.dataset.formula) {
                         return `<img src="${src}" alt="${alt}" style="${escapeHtml(el.getAttribute('style') || '')}">`;
                     }
-                    // 保留原有内联样式（如 ![[img|300]] 生成的 max-width），避免复制后尺寸约束丢失
-                    let imgStyle = (el.getAttribute('style') || '').trim();
-                    if (imgStyle && !imgStyle.endsWith(';')) imgStyle += ';';
-                    const maxWidth = imgStyle.includes('max-width') ? '' : 'max-width:100%;';
-                    const imageChrome = isTechTheme
-                        ? 'height:auto;display:block;margin:1em auto;border-radius:10px;border:1px solid #cbd5e1;'
-                        : (isBrocadeTheme
-                            ? 'height:auto;display:block;margin:1.6em auto;padding:4px;background-color:#fffdf8;border:1px solid #dccdb4;'
-                            : 'height:auto;display:block;margin:1em auto;border-radius:8px;');
-                    return `<img src="${src}" alt="${alt}" style="${escapeHtml(imgStyle + maxWidth + imageChrome)}">`;
-                    
+                    let imgStyle = getWechatSafeStyle(el, { includeSizing: true, includeBox: true });
+                    const rawInline = (el.getAttribute('style') || '').trim();
+                    if (rawInline && /(?:width|max-width)\s*:/.test(rawInline)) imgStyle += rawInline;
+                    if (!imgStyle.includes('max-width:')) imgStyle += 'max-width:100%;';
+                    imgStyle += 'height:auto;display:block;';
+                    return `<img src="${src}" alt="${alt}" style="${escapeHtml(imgStyle)}">`;
+                }
+
                 case 'br':
                     return '<br>';
-                    
+
                 case 'sup':
-                    style = `font-size:0.75em;vertical-align:super;`;
-                    content = processChildren(el, isPoetryTheme);
-                    break;
-                    
                 case 'sub':
-                    style = `font-size:0.75em;vertical-align:sub;`;
+                    style = getWechatSafeStyle(el, { fallbackColor: profile.accent });
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
                 case 'div':
-                    // 处理 callout 容器（用 classList 精确匹配，避免误判 callout-title/callout-content）
+                case 'section':
                     if (el.classList.contains('callout')) {
-                        if (isTechTheme) {
-                            style = `margin:1em 0;padding:12px 16px;border-left:4px solid #7dd3fc;background-color:#f8fafc;color:#475569;border-radius:0 8px 8px 0;`;
-                        } else {
-                            const calloutBg = rgbToHex(computed.backgroundColor) || '#f5f7fa';
-                            const calloutBorder = rgbToHex(computed.borderLeftColor) || '#c7d0dc';
-                            style = `margin:1em 0;padding:12px 16px;border-left:4px solid ${calloutBorder};background-color:${calloutBg};border-radius:0 8px 8px 0;`;
-                        }
+                        style = getWechatSafeStyle(el, {
+                            fallbackColor: profile.text,
+                            fallbackBackground: profile.surface,
+                            includeBackgroundImage: true,
+                            includeBox: true
+                        });
                         content = processChildren(el, isPoetryTheme);
                         break;
                     }
-                    // callout 标题：只加粗，不再套一层 callout 外框
                     if (el.classList.contains('callout-title')) {
-                        style = `font-weight:bold;margin-bottom:0.5em;`;
+                        style = getWechatSafeStyle(el, { fallbackColor: profile.accent }) + 'font-weight:bold;';
                         content = processChildren(el, isPoetryTheme);
                         break;
                     }
-                    // KaTeX 块级公式容器
                     if (el.className && (el.className.includes('katex-display') || el.className.includes('katex'))) {
-                        // 提取原始 LaTeX 并转换为 Unicode
                         const latex = extractLatexFromKatex(el);
                         const unicodeFormula = latexToUnicode(latex);
-                        const formulaColor = isTechTheme ? '#334155' : '#333';
-                        const formulaBox = isTechTheme ? 'padding:10px 12px;background-color:#f8fafc;border-radius:8px;' : '';
-                        return `<p style="margin:1em 0;text-align:center;font-size:16px;line-height:2;color:${formulaColor};${formulaBox}">${unicodeFormula}</p>`;
+                        return `<p style="margin:1em 0;text-align:center;font-size:16px;line-height:2;color:${profile.text};">${escapeHtml(unicodeFormula)}</p>`;
                     }
-                    style = isTechTheme
-                        ? getStyle([['margin', ''], ['padding', ''], ['background-color', ''], ['color', '#334155']])
-                        : getStyle([['margin', ''], ['padding', ''], ['background-color', '']]);
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: hasWechatSurface(el) ? profile.surface : '',
+                        includeBackgroundImage: true,
+                        includeBox: true
+                    });
                     content = processChildren(el, isPoetryTheme);
                     break;
-                    
+
                 case 'span':
-                    // KaTeX 行内公式
                     if (el.className && el.className.includes('katex')) {
                         const latex = extractLatexFromKatex(el);
                         const unicodeFormula = latexToUnicode(latex);
-                        const formulaColor = isTechTheme ? '#334155' : '#333';
-                        return `<span style="font-style:italic;color:${formulaColor};">${unicodeFormula}</span>`;
+                        return `<span style="font-style:italic;color:${profile.text};">${escapeHtml(unicodeFormula)}</span>`;
                     }
-                    const spanColor = ensureCopyContrast(rgbToHex(computed.color));
-                    const spanBg = computed.backgroundColor !== 'rgba(0, 0, 0, 0)' ? `background-color:${rgbToHex(computed.backgroundColor)};` : '';
-                    const spanWeight = computed.fontWeight !== '400' && computed.fontWeight !== 'normal' ? `font-weight:${computed.fontWeight};` : '';
-                    // Obsidian 允许在 Markdown 中直接写 HTML，例如 <span style="font-size:12px">，
-                    // 但公众号复制时需要将字号也转成内联样式，否则会被“无样式 span”逻辑丢弃。
-                    const rawSpanStyle = (el.getAttribute('style') || '').toLowerCase();
-                    const parentFontSize = el.parentElement ? window.getComputedStyle(el.parentElement).fontSize : '';
-                    const spanFontSizeValue = computed.fontSize;
-                    const spanFontSize = (rawSpanStyle.includes('font-size') || (parentFontSize && spanFontSizeValue && parentFontSize !== spanFontSizeValue))
-                        ? `font-size:${spanFontSizeValue};`
-                        : '';
-
-                    style = `color:${spanColor};${spanBg}${spanWeight}${spanFontSize}`;
-                    if (isTechTheme && (!spanColor || spanColor === '#333333' || spanColor === '#000000')) {
-                        style = `color:#334155;${spanBg}${spanWeight}${spanFontSize}`;
-                    }
+                    style = getWechatSafeStyle(el, {
+                        fallbackColor: profile.text,
+                        fallbackBackground: hasWechatSurface(el) ? profile.surface : '',
+                        includeBackgroundImage: true
+                    });
                     content = processChildren(el, isPoetryTheme);
-                    if (!style.replace(/color:[^;]+;/, '').trim()) {
-                        return content; // 如果只有默认颜色，直接返回内容
-                    }
                     break;
-                    
+
                 case 'input':
-                    // 复选框
-                    if (el.type === 'checkbox') {
-                        return el.checked ? '☑ ' : '☐ ';
-                    }
+                    if (el.type === 'checkbox') return el.checked ? '☑ ' : '☐ ';
                     return '';
-                    
+
                 default:
-                    // 未知标签不进入剪贴板，只保留其安全子内容
                     return processChildren(el, isPoetryTheme);
             }
-            
-            if (!content && !['hr', 'br', 'img'].includes(tag)) {
-                return '';
-            }
-            
-            return `<${tag} style="${style}">${content}</${tag}>`;
+
+            if (!content) return '';
+            return `<${tag} style="${escapeHtml(style)}">${content}</${tag}>`;
         }
 
         // 代码块序列化：保留语法高亮 span 的内联颜色；
@@ -4261,8 +4234,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
 
         // 列表转公众号安全结构：section + 每项一个 p（手动项目符号 + 悬挂缩进）
         function renderListForWechat(listEl, ordered, isPoetryTheme) {
-            const isTechTheme = activeWechatCopyMode === 'tech';
-            const isBrocadeTheme = activeWechatCopyMode === 'brocade';
+            const profile = getWechatThemeProfile();
             let idx = 0;
             let itemsHtml = '';
 
@@ -4291,23 +4263,28 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
                     }
                 });
 
-                if (isPoetryTheme) {
-                    itemsHtml += `<p style="margin:0.8em 0;line-height:2.5;text-align:center;">❀ ${inlineHtml}</p>`;
-                } else {
-                    const hasCheckbox = !!li.querySelector(':scope > input[type="checkbox"]');
-                    let marker = hasCheckbox ? '' : (ordered ? `${idx}.&nbsp;` : '•&nbsp;&nbsp;');
-                    // 织锦：项目符号用朱砂，和预览里的 li::marker 一致
-                    if (marker && isBrocadeTheme) marker = `<span style="color:#a8423a;">${marker}</span>`;
-                    const color = isTechTheme ? 'color:#334155;' : (isBrocadeTheme ? 'color:#3a322a;' : '');
-                    itemsHtml += `<p style="margin:0.4em 0;line-height:${isTechTheme ? '1.85' : (isBrocadeTheme ? '1.95' : '1.8')};${color}padding-left:1.5em;text-indent:-1.5em;">${marker}${inlineHtml}</p>`;
-                }
+                const computed = window.getComputedStyle(li);
+                const pseudo = getWechatPseudo(li, '::before');
+                const markerComputed = window.getComputedStyle(li, '::marker');
+                const markerColor = pseudo?.style.match(/color:([^;]+);/)?.[1]
+                    || normalizeWechatStyleValue('color', markerComputed.color)
+                    || profile.accent;
+                const hasCheckbox = !!li.querySelector(':scope > input[type="checkbox"]');
+                const markerText = hasCheckbox ? '' : (ordered ? `${idx}.` : (pseudo?.text || profile.marker || '•'));
+                const markerHtml = markerText
+                    ? `<span style="color:${markerColor};">${escapeHtml(markerText)}&nbsp;&nbsp;</span>`
+                    : '';
+                const align = { start: 'left', end: 'right' }[computed.textAlign] || computed.textAlign || 'left';
+                const centered = align === 'center';
+                const itemStyle = `margin:${computed.margin};line-height:${computed.lineHeight};text-align:${align};color:${rgbToHex(computed.color) || profile.text};${centered ? '' : 'padding-left:1.5em;text-indent:-1.5em;'}`;
+                itemsHtml += `<p style="${escapeHtml(itemStyle)}">${markerHtml}${inlineHtml}</p>`;
                 if (blockHtml) {
                     itemsHtml += `<section style="margin:0 0 0 1.5em;">${blockHtml}</section>`;
                 }
             });
 
-            const wrapStyle = isPoetryTheme ? 'margin:1em 0;text-align:center;' : 'margin:1em 0;';
-            return `<section style="${wrapStyle}">${itemsHtml}</section>`;
+            const wrapStyle = getWechatSafeStyle(listEl, { fallbackColor: profile.text });
+            return `<section style="${escapeHtml(wrapStyle)}">${itemsHtml}</section>`;
         }
 
         // 处理子元素
@@ -4486,7 +4463,12 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             const a = match[4] === undefined ? 1 : parseFloat(match[4]);
 
             if (a === 0) return 'transparent';
-            if (a < 1) return `rgba(${r}, ${g}, ${b}, ${a})`;
+            // 半透明按当前主题纸底压平成实色，不再原样吐 rgba()。
+            // rgbToHex 的调用点全部在公众号复制路径上（含 renderBrocadeTitle、
+            // 列表项与行内色），公众号丢掉 alpha 时那些颜色会跳成实心。
+            if (a < 1) {
+                return flattenWechatAlpha(`rgba(${r}, ${g}, ${b}, ${a})`, getWechatThemeProfile().background);
+            }
 
             return '#' + [r, g, b].map(x => {
                 const hex = x.toString(16);
