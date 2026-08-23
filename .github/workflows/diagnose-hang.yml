@@ -1,11 +1,16 @@
 name: Diagnose test hang
 
-# 临时诊断 workflow：定位 testEveryKeyIsCovered 在 runner 上的挂起范围。
-# 结论出来后应当删除——它不是长期 CI 的一部分。
+# 临时诊断 workflow。结论出来后应当删除——它不是长期 CI 的一部分。
 #
-# 已知：主线程停在 XCTWaiter._synchronouslyWaitForTimeInterval，即 XCTest 把这个
-# 同步测试当异步测试等待完成信号。现在要分清是「只有这一个测试触发」还是
-# 「整套 XCTest 都会中招」。
+# 前提已被上一轮实验推翻：原以为是 testEveryKeyIsCovered 这一个测试挂起，
+# 但同一 runner、同一 commit、前后脚跑的两次全量，第一次 5s 通过 319 项，
+# 第二次卡到被 480s 杀掉。同一个 commit 的 push 与 pull_request 两个 Verify
+# 也是一个 2m34s 通过、一个 15m 超时。所以这是 XCTest 层面的竞态，那个测试
+# 大概率只是日志停下来的位置。
+#
+# 本轮只问一个问题：连跑 N 次全量，挂起时日志停在哪？
+#   每次都停在同一个测试 → 位置有意义，继续挖那里；
+#   停在随机位置       → 通用竞态，该谈重试策略而不是找"那个测试"。
 
 on:
   push:
@@ -20,7 +25,7 @@ jobs:
   isolate:
     name: 逐个隔离运行
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -37,66 +42,61 @@ jobs:
       - name: 预先构建测试（不计入各用例耗时）
         run: swift build --build-tests --disable-sandbox --package-path macos/CreativeWorkshopMac
 
-      - name: 分组运行
+      - name: 重复全量
         run: |
+          # GitHub 用 `bash -e {0}` 跑 step，`set -uo pipefail` 不会关掉 -e。
+          # 上一轮就是因此在第一次挂起时直接中止，汇总一行都没打印出来。
+          set +e
           set -uo pipefail
 
-          # macOS 没有 GNU timeout：自己起一个杀手进程限时。
-          run_limited() {
-            local label="$1" limit="$2" filter="$3" skip="${4:-}"
-            echo "::group::$label"
-            local start=$(date +%s)
+          RUNS=8
+          LIMIT=150   # 通过只要 5s；150s 足够把挂起认出来，又不至于烧满作业
+
+          pass=0
+          hang=0
+          fail=0
+          summary=""
+
+          for i in $(seq 1 "$RUNS"); do
+            echo "::group::第 $i 次全量"
+            start=$(date +%s)
 
             swift test --disable-sandbox --package-path macos/CreativeWorkshopMac \
-              ${filter:+--filter "$filter"} ${skip:+--skip "$skip"} > "/tmp/$label.log" 2>&1 &
-            local pid=$!
-            ( sleep "$limit"; kill -9 "$pid" 2>/dev/null ) &
-            local killer=$!
+              > "/tmp/run_$i.log" 2>&1 &
+            pid=$!
+            ( sleep "$LIMIT"; kill -9 "$pid" 2>/dev/null ) &
+            killer=$!
 
-            wait "$pid"; local rc=$?
-            kill "$killer" 2>/dev/null || true
+            wait "$pid"
+            rc=$?
+            kill "$killer" 2>/dev/null
 
-            local elapsed=$(( $(date +%s) - start ))
-            if [[ "$rc" -eq 0 ]]; then
+            elapsed=$(( $(date +%s) - start ))
+            last=$(grep "Test Case" "/tmp/run_$i.log" | tail -1 | sed 's/.*-\[//; s/\].*//')
+
+            # 必须按耗时区分：秒退的 rc!=0 是「测试真失败」，不是挂起。
+            # 混为一谈的话，一次普通的红会被读成一次挂起，整轮统计就废了。
+            if [ "$rc" -eq 0 ]; then
+              pass=$(( pass + 1 ))
               echo "结果：通过（${elapsed}s）"
-            elif [[ "$elapsed" -ge "$limit" ]]; then
-              echo "结果：★挂起★ 被限时 ${limit}s 杀掉"
+              summary="${summary}第 $i 次  通过 ${elapsed}s"$'\n'
+            elif [ "$elapsed" -ge "$LIMIT" ]; then
+              hang=$(( hang + 1 ))
+              echo "结果：★挂起★（${elapsed}s）停在：${last:-未知}"
+              tail -20 "/tmp/run_$i.log"
+              summary="${summary}第 $i 次  ★挂起★  停在 ${last:-未知}"$'\n'
             else
+              fail=$(( fail + 1 ))
               echo "结果：失败 rc=$rc（${elapsed}s）"
+              tail -20 "/tmp/run_$i.log"
+              summary="${summary}第 $i 次  失败 rc=$rc（${elapsed}s）"$'\n'
             fi
-            echo "--- 日志末尾 ---"
-            tail -20 "/tmp/$label.log"
-            echo "--- 最后一个 started 的测试 ---"
-            grep "Test Case" "/tmp/$label.log" | tail -1 || echo "（无）"
+
+            # 挂起那次会留下孤儿 xctest（上一轮日志末尾就有一条 Terminate
+            # orphan process），不清掉可能影响下一次
+            pkill -9 -x xctest 2>/dev/null
             echo "::endgroup::"
-          }
+          done
 
-          # 1) 只跑挂起的那一个测试：单独跑会不会挂？
-          run_limited single-test 240 "CreativeWorkshopMacTests.PromptTemplateSingleSourceTests/testEveryKeyIsCovered"
-
-          # 2) 跑它所在的整个套件：是套件内前序测试留下的状态导致的吗？
-          run_limited whole-suite 240 "CreativeWorkshopMacTests.PromptTemplateSingleSourceTests"
-
-          # 3) 对照组：一个完全无关的套件。如果它也挂，说明是 XCTest 整体问题。
-          # 注意：--filter 匹配的是「类名」不是文件名。上一版写的
-          # WritingWorkflowSliceTests 是文件名，该文件里的类叫 WritingWorkflowRewriteTests
-          # 等等，于是匹配到 0 个测试却报「通过」——那一格是假绿，白跑了一轮。
-          run_limited control-suite 240 "CreativeWorkshopMacTests.PendingReviewMachineTests"
-
-          # 3b) 跳过嫌疑测试所在的整个套件跑全量：
-          # 若仍然挂，说明它是无辜的——挂的是它之后的某个套件，日志只是停在
-          # 最后一个打印过 started 的测试上。这一条决定后续该往哪个方向找。
-          run_limited skip-suspect 480 "" "CreativeWorkshopMacTests.PromptTemplateSingleSourceTests"
-
-          # 3c) 只跑 Mac 测试目标：挂起需不需要 Eval 目标一起跑？
-          run_limited mac-target-only 480 "CreativeWorkshopMacTests"
-
-          # 4) 全量：确认在本次 runner 上挂起确实可复现（不可复现的话前三条都不算数）
-          run_limited full-suite 480 ""
-
-          # 5) 再跑一次全量：这个挂起在 8/14 是间歇的（同镜像同代码，07:27 挂、09:21 过）。
-          # 连跑两次才能分清「每次必挂」和「碰运气」，否则前面每一格都可能是运气。
-          run_limited full-suite-again 480 ""
-
-          echo "=== 汇总 ==="
-          grep -h "结果：" /tmp/*.log 2>/dev/null || true
+          echo "=== 汇总：$RUNS 次中 通过 $pass / 挂起 $hang / 失败 $fail ==="
+          printf '%s' "$summary"
