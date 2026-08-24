@@ -965,6 +965,7 @@ Callout 提示框：
     line-height: 1.8;
     color: #333;
     padding: 24px;
+    background-color: #ffffff;
 }
 h1, h2, h3, h4, h5, h6 { font-weight: 600; margin: 1.5em 0 0.8em; color: #1a1a1a; }
 h1 { font-size: 1.75em; border-bottom: 2px solid #d9dee7; padding-bottom: 0.4em; }
@@ -1000,6 +1001,7 @@ th { background: #f8fafc; font-weight: 600; }
     color: #3f3f3f;
     padding: 20px;
     letter-spacing: 0.034em;
+    background-color: #ffffff;
 }
 h1, h2, h3 { font-weight: bold; margin: 1.5em 0 0.8em; color: #000; }
 h1 { font-size: 22px; text-align: center; }
@@ -1563,40 +1565,35 @@ th { background: rgba(99, 102, 241, 0.10); }`
                 desc: '种草风格',
                 css: `#preview-container {
     font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    font-size: 15px;
-    line-height: 1.8;
-    color: #333;
-    padding: 20px;
-    background: linear-gradient(180deg, #fff5f5 0%, #fff 30%);
+    font-size: 15.5px;
+    line-height: 1.95;
+    color: #3d3a3b;
+    letter-spacing: 0.01em;
+    padding: 24px 18px 34px;
+    background-color: #fff6f7;
 }
-h1 { font-size: 20px; font-weight: 700; color: #ff2442; margin: 1em 0 0.5em; text-align: center; }
-h1::before { content: "✨ "; }
-h1::after { content: " ✨"; }
-h2 { font-size: 17px; font-weight: 600; color: #333; margin: 1.2em 0 0.5em; display: flex; align-items: center; gap: 8px; }
-h2::before { content: "📌"; }
-h3 { font-size: 15px; font-weight: 600; color: #ff6b6b; margin: 1em 0 0.5em; }
-h3::before { content: "💕 "; }
-p { margin: 0.8em 0; }
-strong { color: #ff2442; background: linear-gradient(to bottom, transparent 60%, #ffe4e8 60%); padding: 0 2px; }
-em { color: #ff6b6b; font-style: normal; }
-mark { background: #fffacd; padding: 2px 4px; border-radius: 4px; }
-blockquote { border: none; padding: 15px 20px; margin: 1em 0; background: linear-gradient(135deg, #fff5f5 0%, #ffe4e8 100%); border-radius: 15px; color: #666; position: relative; }
-blockquote::before { content: "💭"; position: absolute; top: -10px; left: 15px; font-size: 20px; }
-code { background: #fff0f3; padding: 2px 6px; border-radius: 10px; color: #ff2442; font-size: 0.9em; }
-pre { background: #fff5f5; padding: 15px; border-radius: 15px; border: 2px solid #ffe4e8; }
-pre code { background: none; }
-ul { list-style: none; padding-left: 0; }
-li { margin: 0.6em 0; padding-left: 1.5em; position: relative; }
-li::before { content: "🌟"; position: absolute; left: 0; }
-ol { padding-left: 1.5em; }
-ol li::before { content: none; }
-a { color: #ff2442; text-decoration: none; }
-img { max-width: 100%; border-radius: 15px; margin: 1em 0; box-shadow: 0 4px 15px rgba(255, 36, 66, 0.15); }
-hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, #ff2442, transparent); margin: 1.5em 0; }
-table { border-radius: 15px; overflow: hidden; border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-th { background: #ff2442; color: #fff; border: none; padding: 12px; }
-td { border: none; border-bottom: 1px solid #ffe4e8; padding: 12px; }
-tr:last-child td { border-bottom: none; }`
+h1 { font-size: 21px; font-weight: 800; line-height: 1.55; letter-spacing: -0.01em; color: #221f20; text-align: center; margin: 0 0 1.5em; padding: 22px 16px; background-color: #ffffff; border-radius: 18px; border-bottom: 4px solid #ff2442; }
+h2 { font-size: 17px; font-weight: 700; color: #221f20; margin: 2em 0 0.9em; padding: 2px 0 2px 12px; border-left: 5px solid #ff2442; letter-spacing: 0.01em; }
+h3 { font-size: 15.5px; font-weight: 700; color: #ff2442; margin: 1.6em 0 0.7em; padding: 1px 0 1px 10px; border-left: 3px solid #ffc2cc; }
+p { margin: 0 0 1.15em; }
+strong { font-weight: 700; color: #221f20; background-image: linear-gradient(transparent 58%, #ffd9e0 58%); padding: 0 2px; }
+em { color: #ff2442; font-style: normal; font-weight: 600; }
+mark { background-color: #fff3a3; color: #3d3a3b; padding: 1px 5px; border-radius: 4px; }
+blockquote { margin: 1.5em 0; padding: 16px 18px; color: #6b6567; background-color: #ffffff; border: none; border-left: 5px solid #ff2442; border-radius: 0 14px 14px 0; }
+code { background-color: #ffeef1; color: #ff2442; padding: 2px 7px; border-radius: 6px; font-size: 0.9em; }
+pre { background-color: #ffffff; color: #3d3a3b; padding: 16px; border: 1px solid #ffd9e0; border-radius: 14px; margin: 1.5em 0; overflow-x: auto; }
+pre code { background: none; color: inherit; padding: 0; }
+ul, ol { padding-left: 1.4em; margin: 1.2em 0; }
+li { margin: 0.55em 0; }
+li::marker { color: #ff2442; }
+a { color: #ff2442; text-decoration: none; border-bottom: 1px solid #ffc2cc; }
+img { max-width: 100%; margin: 1.5em 0; border-radius: 16px; }
+hr { border: none; text-align: center; margin: 2.4em 0; }
+hr::before { content: "● ● ●"; color: #ffc2cc; font-size: 9px; letter-spacing: 0.55em; }
+table { width: 100%; border-collapse: collapse; margin: 1.5em 0; font-size: 14.5px; background-color: #ffffff; border-radius: 14px; overflow: hidden; }
+th { background-color: #ff2442; color: #ffffff; padding: 11px 12px; text-align: left; font-weight: 600; border: none; }
+td { padding: 11px 12px; border: none; border-bottom: 1px solid #ffe4e8; }
+.katex-display { margin: 1.4em 0; overflow-x: auto; }`
             },
 
             sticker: {
@@ -1647,10 +1644,11 @@ td { padding: 10px 12px; border: none; border-bottom: 2px dashed #dfe6e9; }`
     line-height: 1.8;
     color: #f5f5f5;
     padding: 30px;
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
-    background-image: 
+    background-color: #16213e;
+    background-image:
         radial-gradient(circle at 10% 20%, rgba(255,107,0,0.1) 0%, transparent 40%),
-        radial-gradient(circle at 90% 80%, rgba(138,43,226,0.1) 0%, transparent 40%);
+        radial-gradient(circle at 90% 80%, rgba(138,43,226,0.1) 0%, transparent 40%),
+        linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
 }
 h1 { font-size: 26px; color: #ff6b00; margin: 1em 0 0.5em; text-align: center; text-shadow: 0 0 10px rgba(255,107,0,0.5), 0 0 20px rgba(255,107,0,0.3); }
 h1::before { content: "🎃 "; }
@@ -1700,10 +1698,11 @@ td { padding: 10px 12px; border: 1px solid rgba(155,89,182,0.3); }
     line-height: 1.9;
     color: #2c3e50;
     padding: 30px;
-    background: linear-gradient(180deg, #e8f5e9 0%, #fff 30%, #ffebee 100%);
-    background-image: 
+    background-color: #ffffff;
+    background-image:
         radial-gradient(circle at 5% 5%, rgba(198,40,40,0.1) 0%, transparent 30%),
-        radial-gradient(circle at 95% 95%, rgba(46,125,50,0.1) 0%, transparent 30%);
+        radial-gradient(circle at 95% 95%, rgba(46,125,50,0.1) 0%, transparent 30%),
+        linear-gradient(180deg, #e8f5e9 0%, #fff 30%, #ffebee 100%);
 }
 h1 { font-size: 24px; color: #c62828; margin: 1em 0 0.5em; text-align: center; }
 h1::before { content: "🎄 "; }
@@ -3710,7 +3709,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             poetry: { background: '#faf5f0', text: '#4a4a4a', accent: '#8b4513', surface: '#f5ebe0', border: '#c9a86c', marker: '❀', separator: '✿ ❀ ✿' },
             poetry_gilded: { background: '#fdf8ee', text: '#3f3a33', accent: '#7a4b12', surface: '#f5ebe0', border: '#c9a86c', marker: '❀', separator: '◆' },
             poetry_moonlight: { background: '#f7f9ff', text: '#2f3342', accent: '#4338ca', surface: '#eef2ff', border: '#9aa4df', marker: '✦', separator: '✦' },
-            xiaohongshu: { background: '#fffef7', text: '#333333', accent: '#ff2442', surface: '#fff0f3', border: '#ffb6c1', marker: '●' },
+            xiaohongshu: { background: '#fff6f7', text: '#3d3a3b', accent: '#ff2442', surface: '#ffffff', border: '#ffd9e0', marker: '●' },
             sticker: { background: '#f0e6d3', text: '#3f3a33', accent: '#d97706', surface: '#fff3c4', border: '#e8c97b', marker: '•' },
             halloween: { background: '#17121f', text: '#f4e9ff', accent: '#ff8a00', surface: '#2a2036', border: '#7c4d9e', marker: '✦' },
             christmas: { background: '#fffdf8', text: '#31423a', accent: '#a3272f', surface: '#f2f7f2', border: '#9eaea4', marker: '•' },
@@ -3833,6 +3832,12 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
 
         function normalizeWechatStyleValue(prop, value) {
             value = String(value || '').trim();
+            // font-style 的 normal 不能当无意义值丢掉：<em>/<i> 浏览器默认就是斜体，
+            // 主题写 font-style:normal 正是为了抵消它。丢掉后粘贴结果会冒出意料外的
+            // 斜体——小红书、织锦、手写笔记、手绘涂鸦四个主题都把 em 设成了非斜体。
+            if (prop === 'font-style') {
+                return ['normal', 'italic', 'oblique'].includes(value) ? value : '';
+            }
             if (!value || value === 'none' || value === 'normal' || value === 'auto') return '';
             if (prop === 'text-align') value = { start: 'left', end: 'right' }[value] || value;
             if (prop === 'font-family') value = value.replace(/"/g, "'");
@@ -3901,6 +3906,11 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             const computed = window.getComputedStyle(el);
             const props = options.props || WECHAT_SAFE_INLINE_PROPS;
             let style = '';
+            // 渐变文字（background-clip:text）：渐变是画在字上的，不是画在盒子上。
+            // 认错会把标题变成一块实心色板，字反而被压暗——科技极客的 h1 就这样
+            // 变成了「灰字压在亮青色块上」。
+            const textClip = computed.getPropertyValue('background-clip') === 'text'
+                || computed.getPropertyValue('-webkit-background-clip') === 'text';
 
             props.forEach(prop => {
                 const value = normalizeWechatStyleValue(prop, computed.getPropertyValue(prop));
@@ -3909,16 +3919,20 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
 
             let foreground = normalizeWechatStyleValue('color', computed.color);
             if (!foreground || foreground === 'transparent') foreground = options.fallbackColor || '';
+            // 渐变文字降级成实色：取渐变第一个色标，比退回继承色更接近原设计
+            if (textClip) {
+                const clipped = deriveGradientFallback(computed.backgroundImage);
+                if (clipped) foreground = clipped;
+            }
 
             let background = normalizeWechatStyleValue('background-color', computed.backgroundColor);
             if (!background || background === 'transparent') {
-                background = deriveGradientFallback(computed.backgroundImage) || options.fallbackBackground || '';
+                const derived = textClip ? '' : deriveGradientFallback(computed.backgroundImage);
+                background = derived || options.fallbackBackground || '';
             }
             if (background) style += `background-color:${background};`;
 
             if (options.includeBackgroundImage) {
-                const textClip = computed.getPropertyValue('background-clip') === 'text'
-                    || computed.getPropertyValue('-webkit-background-clip') === 'text';
                 const backgroundImage = textClip ? '' : normalizeWechatStyleValue('background-image', computed.backgroundImage);
                 if (backgroundImage) {
                     style += `background-image:${backgroundImage};`;
