@@ -1101,32 +1101,39 @@ th { background: #ecf0ef; color: #2f5d62; font-weight: 600; }
                 icon: '🚀',
                 desc: '暗色渐变',
                 css: `#preview-container {
-    font-family: "SF Pro Display", -apple-system, "Roboto", sans-serif;
-    font-size: 16px;
-    line-height: 1.8;
-    color: #e0e0e0;
-    padding: 25px;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    font-size: 15.5px;
+    line-height: 1.85;
+    color: #c7d2de;
+    letter-spacing: 0.01em;
+    padding: 26px 20px 34px;
+    background-color: #0b1020;
 }
-h1, h2, h3 { font-weight: 700; margin: 1.5em 0 0.8em; }
-h1 { font-size: 2em; background: linear-gradient(90deg, #00d9ff, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-h2 { font-size: 1.5em; color: #00d9ff; border-left: 4px solid #00d9ff; padding: 10px 15px; background: rgba(0, 217, 255, 0.1); border-radius: 0 8px 8px 0; }
-h3 { font-size: 1.25em; color: #a855f7; }
-p { margin: 1em 0; }
-strong { color: #00d9ff; }
-em { color: #a855f7; }
-blockquote { border-left: 4px solid #a855f7; padding: 15px 20px; background: rgba(168, 85, 247, 0.1); color: #c0c0c0; border-radius: 0 8px 8px 0; }
-code { background: rgba(0, 217, 255, 0.15); padding: 3px 8px; border-radius: 4px; color: #00d9ff; border: 1px solid rgba(0, 217, 255, 0.3); }
-pre { background: #0d0d1a; padding: 20px; border-radius: 12px; border: 1px solid rgba(0, 217, 255, 0.2); box-shadow: 0 0 20px rgba(0, 217, 255, 0.1); }
-pre code { background: none; border: none; }
-ul, ol { padding-left: 2em; }
-li::marker { color: #00d9ff; }
-a { color: #00d9ff; }
-img { max-width: 100%; border-radius: 12px; border: 1px solid rgba(0, 217, 255, 0.2); }
-hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, #00d9ff, #a855f7, transparent); margin: 2em 0; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid rgba(0, 217, 255, 0.3); padding: 12px; }
-th { background: rgba(0, 217, 255, 0.1); color: #00d9ff; }`
+h1 { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; font-size: 21px; font-weight: 700; line-height: 1.6; color: #22d3ee; margin: 0 0 1.4em; padding: 0 0 12px; border-bottom: 1px solid #1e3a4d; letter-spacing: 0; }
+h1::before { content: "# "; color: #4b6b7d; }
+h2 { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; font-size: 17px; font-weight: 700; color: #22d3ee; margin: 2.2em 0 0.9em; padding: 0 0 8px; border-bottom: 1px dashed #1e3a4d; letter-spacing: 0; }
+h2::before { content: "$ "; color: #4ade80; }
+h3 { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; font-size: 15.5px; font-weight: 600; color: #4ade80; margin: 1.8em 0 0.7em; letter-spacing: 0; }
+h3::before { content: "// "; color: #4b6b7d; }
+p { margin: 0 0 1.15em; }
+strong { color: #22d3ee; font-weight: 600; }
+em { color: #4ade80; font-style: normal; }
+mark { background-color: #164e63; color: #e0f2fe; padding: 1px 5px; }
+blockquote { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; font-size: 14px; line-height: 1.9; color: #8fa3b5; background-color: #0f172a; border: none; border-left: 2px solid #334155; border-radius: 0; padding: 14px 16px; margin: 1.6em 0; }
+code { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; background-color: #0f2733; color: #4ade80; padding: 2px 6px; border-radius: 2px; font-size: 0.9em; }
+pre { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; background-color: #05070d; color: #c7d2de; border: 1px solid #1e3a4d; border-radius: 4px; padding: 16px; margin: 1.6em 0; line-height: 1.65; overflow-x: auto; }
+pre code { background: none; color: inherit; padding: 0; }
+ul, ol { padding-left: 1.5em; margin: 1.2em 0; }
+li { margin: 0.5em 0; }
+li::marker { color: #22d3ee; }
+a { color: #22d3ee; text-decoration: none; border-bottom: 1px dashed #1e5a6b; }
+img { max-width: 100%; margin: 1.6em 0; border: 1px solid #1e3a4d; border-radius: 4px; }
+hr { border: none; text-align: left; margin: 2.4em 0; }
+hr::before { content: "// ────────"; font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; color: #1e3a4d; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; margin: 1.6em 0; font-size: 14px; font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
+th { background-color: #0f2733; color: #22d3ee; padding: 10px 12px; text-align: left; font-weight: 600; border: 1px solid #1e3a4d; }
+td { padding: 10px 12px; border: 1px solid #16283a; color: #c7d2de; }
+.katex-display { margin: 1.4em 0; overflow-x: auto; }`
             },
 
             warm: {
@@ -3700,7 +3707,7 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             wechat: { background: '#ffffff', text: '#3f3f3f', accent: '#000000', surface: '#f7f7f7', border: '#d0d7de', marker: '•' },
             elegant: { background: '#faf8f5', text: '#2c3e50', accent: '#8b4513', surface: '#faf5eb', border: '#c9a86c', marker: '◆' },
             brocade: { background: '#faf6ee', text: '#3a322a', accent: '#2f5d62', surface: '#ecf0ef', border: '#dccdb4', marker: '•', separator: '◆' },
-            tech: { background: '#1a1a2e', text: '#e0e0e0', accent: '#00d9ff', surface: '#16213e', border: '#386579', marker: '•' },
+            tech: { background: '#0b1020', text: '#c7d2de', accent: '#22d3ee', surface: '#0f172a', border: '#1e3a4d', marker: '▸' },
             warm: { background: '#fff7eb', text: '#4a4a4a', accent: '#7c4a2d', surface: '#f6eadc', border: '#d8b892', marker: '•' },
             minimal: { background: '#ffffff', text: '#1a1a1a', accent: '#000000', surface: '#fafafa', border: '#e0e0e0', marker: '•' },
             academic: { background: '#ffffff', text: '#000000', accent: '#000000', surface: '#f5f5f5', border: '#000000', marker: '•' },
@@ -3969,7 +3976,10 @@ tr:nth-child(even) td { background: rgba(255,245,245,0.5); }`
             let text = (quote === '"' || quote === "'") && raw[raw.length - 1] === quote
                 ? raw.slice(1, -1)
                 : raw;
-            return text.replace(/\\A\s?/gi, '\n').replace(/\\([\\"'])/g, '$1').trimEnd();
+            // 只清掉尾部换行，不要 trimEnd：伪元素 content 里的尾随空格是设计者
+            // 有意写的间距（如 "# " "$ " "// " 这类前缀），剥掉后粘贴结果会变成
+            // 「#标题」贴在一起。注意 JS 的 trimEnd 连 U+00A0 也一并剥，绕不过去。
+            return text.replace(/\\A\s?/gi, '\n').replace(/\\([\\"'])/g, '$1').replace(/[\r\n]+$/, '');
         }
 
         function getWechatPseudo(el, pseudo) {
