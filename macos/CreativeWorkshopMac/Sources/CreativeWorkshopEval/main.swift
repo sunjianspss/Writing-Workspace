@@ -3,7 +3,7 @@ import CreativeWorkshopCore
 
 func run() async -> Int32 {
     let arguments = CommandLine.arguments
-    var pipelines = PipelineRunner.pipelineNames
+    var pipelines = PipelineRunner.defaultPipelineNames
     if let flagIndex = arguments.firstIndex(of: "--pipelines"), arguments.count > flagIndex + 1 {
         let requested = arguments[flagIndex + 1]
             .split(separator: ",")
@@ -28,6 +28,20 @@ func run() async -> Int32 {
 
     // 断点续跑（24.9）：全量一轮 112 格约 8 小时，中断后此前只能从 case-01 重烧。
     let resumeRequested = arguments.contains("--resume")
+
+    // 配对重判（24.14）：`--rejudge [run_id|latest]`，拿存量正文只重跑评分。
+    if let flagIndex = arguments.firstIndex(of: "--rejudge") {
+        let target = arguments.count > flagIndex + 1 && !arguments[flagIndex + 1].hasPrefix("--")
+            ? arguments[flagIndex + 1]
+            : "latest"
+        return await runRejudge(
+            target: target,
+            arguments: arguments,
+            pipelines: pipelines,
+            requestedCaseIDs: requestedCaseIDs,
+            resume: resumeRequested
+        )
+    }
 
     let apiKey = EvalPipelineFacade.readAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
     guard !apiKey.isEmpty else {
@@ -160,6 +174,119 @@ func run() async -> Int32 {
         return 0
     } catch {
         FileHandle.standardError.write("评测失败：\(error.localizedDescription)\n".data(using: .utf8)!)
+        return 1
+    }
+}
+
+/// `--rejudge`：两个评分变量 × 同一批存量正文，出配对差值 + 完整问题维度表。
+func runRejudge(
+    target: String,
+    arguments: [String],
+    pipelines: [String],
+    requestedCaseIDs: [String],
+    resume: Bool
+) async -> Int32 {
+    let apiKey = EvalPipelineFacade.readAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !apiKey.isEmpty else {
+        FileHandle.standardError.write((EvalError.missingAPIKey.errorDescription ?? "缺少 API Key").appending("\n").data(using: .utf8)!)
+        return 1
+    }
+
+    let cwd = FileManager.default.currentDirectoryPath
+    let evalsDir = URL(fileURLWithPath: cwd).appendingPathComponent("evals")
+    let resultsDBURL = evalsDir.appendingPathComponent("eval_results.sqlite3")
+    let reportsDir = evalsDir.appendingPathComponent("reports")
+
+    // 对照臂固定为「改动前 → 改动后」；换别的变量时改这里，报告头会写出两臂名字。
+    let before = EvalPipelineFacade.ScoringVariant.anchored83
+    let after = EvalPipelineFacade.ScoringVariant.placeholder
+
+    do {
+        let store = try EvalResultsStore(databaseURL: resultsDBURL)
+        let sourceRunID: String
+        if target == "latest" {
+            guard let latest = try store.latestRun() else {
+                FileHandle.standardError.write("库里没有可重判的 run。\n".data(using: .utf8)!)
+                return 1
+            }
+            sourceRunID = latest.runID
+            print("重判来源：最近一轮 \(latest.runID)（\(latest.runTimestamp)）")
+        } else {
+            sourceRunID = target
+        }
+
+        var sourceOutcomes = try store.outcomes(runID: sourceRunID)
+        guard !sourceOutcomes.isEmpty else {
+            FileHandle.standardError.write("run \(sourceRunID) 没有任何结果。\n".data(using: .utf8)!)
+            return 1
+        }
+        sourceOutcomes = sourceOutcomes.filter { pipelines.contains($0.pipeline) }
+        if !requestedCaseIDs.isEmpty {
+            sourceOutcomes = sourceOutcomes.filter { requestedCaseIDs.contains($0.caseID) }
+        }
+
+        var cases = try EvalCaseLoader.loadCases(from: evalsDir.appendingPathComponent("cases"))
+        if !requestedCaseIDs.isEmpty {
+            cases = try CaseFilter.apply(requestedCaseIDs, to: cases)
+        }
+
+        let styleSamples = try EvalStyleSampleLoader.load(from: evalsDir.appendingPathComponent("style_samples"))
+        let facade = try EvalPipelineFacade(apiKey: apiKey, styleSamples: styleSamples.map(\.text))
+        let runner = RejudgeRunner(facade: facade, cases: cases, sourceOutcomes: sourceOutcomes)
+        let plans = runner.plans(variants: [before, after])
+        guard !plans.isEmpty else {
+            FileHandle.standardError.write("没有可重判的格子（原轮成功且正文非空的格子为 0）。\n".data(using: .utf8)!)
+            return 1
+        }
+
+        let rejudgeStore = try RejudgeStore(databaseURL: resultsDBURL)
+        // 重判批次 id 由来源 run 决定：同一个来源多次重判会落进同一批，续跑因此可以跳过已完成的格子。
+        let rejudgeID = "rejudge-\(sourceRunID)"
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let completed = resume ? try rejudgeStore.completedCells(rejudgeID: rejudgeID) : []
+        if resume, !completed.isEmpty {
+            print("续跑：已有 \(completed.count) 格成功结果，本次只跑缺口。")
+        }
+
+        print("待重判 \(plans.count) 格（\(plans.count / 2) 格正文 × 2 个变量），只发评分调用，不重新生成正文。")
+        var done = 0
+        for plan in plans {
+            let key = "\(plan.variant.rawValue)|\(plan.outcome.caseID)|\(plan.outcome.pipeline)"
+            done += 1
+            if completed.contains(key) {
+                print("[\(done)/\(plans.count)] 跳过 \(key)")
+                continue
+            }
+            print("[\(done)/\(plans.count)] 重判 \(plan.outcome.caseID) / \(plan.outcome.pipeline) / \(plan.variant.rawValue) ...")
+            let row = await runner.run(plan: plan)
+            try rejudgeStore.upsert(
+                rejudgeID: rejudgeID,
+                timestamp: timestamp,
+                sourceRunID: sourceRunID,
+                label: "\(before.rawValue)-vs-\(after.rawValue)",
+                row: row
+            )
+        }
+
+        let rows = try rejudgeStore.rows(rejudgeID: rejudgeID)
+        let report = RejudgeReport.generate(
+            rejudgeID: rejudgeID,
+            timestamp: timestamp,
+            sourceRunID: sourceRunID,
+            gitDescribe: GitDescribe.current(repositoryPath: cwd),
+            rows: rows,
+            before: before,
+            after: after
+        )
+        try FileManager.default.createDirectory(at: reportsDir, withIntermediateDirectories: true)
+        let reportURL = reportsDir.appendingPathComponent(
+            "rejudge-" + timestamp.replacingOccurrences(of: ":", with: "-") + ".md"
+        )
+        try report.write(to: reportURL, atomically: true, encoding: .utf8)
+        print("重判完成，对照报告已写入：\(reportURL.path)")
+        return 0
+    } catch {
+        FileHandle.standardError.write("重判失败：\(error.localizedDescription)\n".data(using: .utf8)!)
         return 1
     }
 }

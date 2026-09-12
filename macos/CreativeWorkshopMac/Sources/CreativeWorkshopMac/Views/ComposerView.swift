@@ -175,17 +175,12 @@ struct ComposerView: View {
             }
         }
         .padding(16)
-        .background(
-            LinearGradient(
-                colors: [Color.accentColor.opacity(0.16), Color.accentColor.opacity(0.04)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 14)
-        )
+        // 原先是一整片强调色渐变。强调色只留给动作与状态，大面积铺开在深色下会
+        // 变成一块蓝，和中性卡片打架——这里回到普通卡片面，靠图标与读数区分身份。
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -467,7 +462,8 @@ struct ComposerView: View {
                         .controlSize(.small)
                     }
                     .padding(12)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    // 同上：当前选题是卡片里的嵌套块，不是动作，不该整块铺强调色。
+                    .background(WorkshopPalette.canvas, in: RoundedRectangle(cornerRadius: 10))
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("还没有当前选题。先写下一个想法，或从右侧资料栏选择一条待写选题。")
@@ -1026,7 +1022,7 @@ struct ComposerView: View {
         content()
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 12))
+            .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.primary.opacity(0.08), lineWidth: 1)
@@ -1037,7 +1033,7 @@ struct ComposerView: View {
         content()
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 12))
+            .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.primary.opacity(0.08), lineWidth: 1)
@@ -1074,7 +1070,8 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 9))
+        // 卡片里的嵌套块回到底色那一档：surface 上叠 canvas，浅深两色都看得见。
+        .background(WorkshopPalette.canvas, in: RoundedRectangle(cornerRadius: 9))
     }
 
     private func topicDetail(_ title: String, _ value: String?) -> some View {
@@ -1527,7 +1524,7 @@ private struct PublishAssetsCard: View {
         content()
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.primary.opacity(0.09), lineWidth: 1)

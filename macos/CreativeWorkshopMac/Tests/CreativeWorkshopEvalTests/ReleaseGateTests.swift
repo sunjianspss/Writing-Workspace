@@ -38,7 +38,21 @@ final class ReleaseGateTests: XCTestCase {
         let verdict = ReleaseGate.evaluate(outcomes: outcomes)
 
         XCTAssertFalse(verdict.passed)
-        XCTAssertTrue(verdict.lines.contains("放行门：暂无 agentic 管线数据"))
+        // agentic 不在默认管线里之后，这条是每轮常规输出。它必须说清"这轮没跑"而不是
+        // "还没接进来"，也不能让人误读成放行门仍在等一个结论。
+        let line = verdict.lines.joined(separator: "\n")
+        XCTAssertTrue(line.contains("本轮未跑 agentic 管线"), "实际：\(line)")
+        XCTAssertTrue(line.contains("已终判"), "缺少指向已归档裁决的说明：\(line)")
+    }
+
+    func testAgenticStaysARunnablePipelineEvenThoughItLeftTheDefaultSet() {
+        // 终判"不转默认"落到工具上只该是"默认不跑"，不能顺手变成"不能跑"——复议要靠
+        // `--pipelines` 显式带上它重跑，那条路必须留着。
+        XCTAssertFalse(PipelineRunner.defaultPipelineNames.contains("agentic"))
+        XCTAssertTrue(PipelineRunner.pipelineNames.contains("agentic"))
+        for pipeline in PipelineRunner.defaultPipelineNames {
+            XCTAssertTrue(PipelineRunner.pipelineNames.contains(pipeline), "默认管线必须是合法管线：\(pipeline)")
+        }
     }
 
     func testGatePassesWhenAllThreeCriteriaAreMet() {

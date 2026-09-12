@@ -87,7 +87,7 @@ struct SidebarView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(WorkshopPalette.navBackground)
+        .background(WorkshopPalette.canvas)
     }
 
     private var newDraftRow: some View {

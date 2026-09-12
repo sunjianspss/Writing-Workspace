@@ -11,6 +11,10 @@ package struct WritingWorkflow {
         case missingExecutor
         /// 模型返回了空替换文本。改写不能拿空串去覆盖正文，只能整体放弃。
         case emptyRewriteReplacement
+        /// 投影失败后连回收也失败：数据库里留下了一个界面看不见、作者也无法
+        /// 确认或放弃的待复核版本。两个错误都要报——投影错误说明发生了什么，
+        /// 版本号说明库里还剩什么。
+        case pendingCleanupFailed(versionID: Int, projection: Error, cleanup: Error)
 
         package var errorDescription: String? {
             switch self {
@@ -18,6 +22,11 @@ package struct WritingWorkflow {
                 "WritingWorkflow 未配置 AI executor"
             case .emptyRewriteReplacement:
                 "模型没有返回可替换文本"
+            case let .pendingCleanupFailed(versionID, projection, cleanup):
+                """
+                \(projection.localizedDescription)；\
+                回收候选也失败，数据库中遗留待复核版本 #\(versionID)（\(cleanup.localizedDescription)）
+                """
             }
         }
     }
@@ -37,7 +46,10 @@ package struct WritingWorkflow {
         case pendingDiscarded(versionID: Int, restore: DraftSnapshot, preservedVersion: DraftVersion?)
         case pendingCleaned(versionID: Int, didRemove: Bool)
         case draftVersionRecorded(DraftVersion)
-        case articleSaved(Article, overwriteVersion: DraftVersion?)
+        /// `markedTopic`：本次保存把哪条选题翻成了「已写」。nil = 这篇没关联选题，或关联的
+        /// 选题已被删除。随 outcome 返回而不是让 Store 事后自己查，是为了守住「落库成功后
+        /// 才投影」——Store 拿到它才刷新选题列表。
+        case articleSaved(Article, overwriteVersion: DraftVersion?, markedTopic: Topic?)
     }
 
     package struct PendingDelivery {
@@ -752,6 +764,32 @@ package struct WritingWorkflow {
         )
 
         return try database.withTransaction {
+            // 兜底产物不入库。无 API Key 或调用失败时 `NativeFallbacks` 会产出三句模板套用
+            // 当前想法的"选题"（「{想法}，为什么值得认真写一次」「普通人理解{想法}的最小
+            // 入口」「我重新看待{想法}之后，发现它并不遥远」），此前它们与真选题一样落库、
+            // 没有任何标记——库里 123 条选题有 18 条是这么来的，其中"如何写红楼梦的林黛玉？"
+            // 连问号都被原样嵌进了标题。翻到几次之后整个列表就不可信了，而选题列表一旦不可
+            // 信，管线的第一站就断了。
+            //
+            // 这与架构边界一致：演示 fallback 必须明确标注后交给作者复核，不得被静默接受。
+            // 轨迹照常记录（失败的调用也是证据），素材也不标记已用——它并没有被真的用掉。
+            guard run.success else {
+                let agentRun = try recordSingleStepRun(
+                    actionTitle: request.actionTitle,
+                    summary: "模型调用失败，未写入任何选题。",
+                    request: request.analysis,
+                    run: run,
+                    stepName: "生成选题"
+                )
+                return TopicsOutcome(
+                    agentRun: agentRun,
+                    created: [],
+                    duplicates: [],
+                    usedFallback: true,
+                    error: run.error
+                )
+            }
+
             let created = try database.createTopics(uniqueTopics)
             if let ideaID = request.markIdeaUsedID {
                 _ = try database.markIdeaUsed(id: ideaID, used: true)
@@ -1036,8 +1074,9 @@ package struct WritingWorkflow {
     ///
     /// `stage` 由调用方提供，因为投影目标（`WritingSession`）不属于本层。
     ///
-    /// 残留风险：回收本身失败时无处上报，仍会留下孤儿 pending 行。这里保持既有语义
-    /// ——原始的投影错误才是作者需要看到的那个，优先把它抛出去。
+    /// 回收成功时抛出的仍是原始的投影错误——那才是作者需要处理的那个。只有回收
+    /// 本身也失败时才换成 `pendingCleanupFailed`：这时库里留下了一个界面看不见、
+    /// 也无法确认或放弃的版本，瞒着作者比多一条错误信息更糟。
     package func commitPending(
         version: DraftVersion,
         pending: PendingDraftReview,
@@ -1046,7 +1085,15 @@ package struct WritingWorkflow {
         do {
             try stage(pending)
         } catch {
-            _ = try? execute(.cleanupPending(versionID: version.id))
+            do {
+                _ = try execute(.cleanupPending(versionID: version.id))
+            } catch let cleanupError {
+                throw WorkflowError.pendingCleanupFailed(
+                    versionID: version.id,
+                    projection: error,
+                    cleanup: cleanupError
+                )
+            }
             throw error
         }
     }
@@ -1164,7 +1211,11 @@ package struct WritingWorkflow {
                 }
             }
 
-            return .articleSaved(article, overwriteVersion: overwriteVersion)
+            // 选题写成文章后翻「已写」，和文章落库在同一个事务里：否则会出现「文章存下了、
+            // 选题还挂着待写」的半截状态，而这正是列表只增不减的来源。
+            let markedTopic = try article.related_topic_id.flatMap { try database.markTopicWritten(id: $0) }
+
+            return .articleSaved(article, overwriteVersion: overwriteVersion, markedTopic: markedTopic)
         }
     }
 

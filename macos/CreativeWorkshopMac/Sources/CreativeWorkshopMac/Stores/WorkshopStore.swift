@@ -323,9 +323,13 @@ final class WorkshopStore: ObservableObject {
                 self.editStyleProfile(self.styleProfiles.first)
             }
 
-            if self.selectedTopicID == nil {
-                self.selectedTopicID = self.topics.first?.id
-            }
+            // 这里曾经在 selectedTopicID 为空时自动挂上 `topics.first`。它每次 refresh 都跑，
+            // 于是任何没有明确选过选题的文章，保存时都会被绑到"当时列表里排第一的那条"——
+            // 库里 10 条文章-选题关联有 6 条是这么串台的（《葬花吟》的选题挂到了 Fable 5
+            // 提示词那篇上）。串台还会顺着 related_topic_id 污染上下文包与选题去重。
+            //
+            // 没有当前选题是一个合法状态，ComposerView 有对应的空态文案（"还没有当前选题。
+            // 先写下一个想法，或从右侧资料栏选择一条待写选题。"）。让它空着。
             if let articleID = self.selectedArticleID {
                 self.latestReview = try self.database.listWritingReviews(articleID: articleID, limit: 1).first
                 self.latestPublishAssets = try self.database.listPublishAssets(articleID: articleID, limit: 1).first
@@ -985,7 +989,7 @@ final class WorkshopStore: ObservableObject {
                 payload: .draft(title: self.title, content: self.content, summary: self.summary, status: finalStatus, tags: self.draftTags, topicID: self.selectedTopicID, genre: self.normalizedDirection),
                 titleSnapshot: self.titleIfAvailable()
             )))
-            guard case let .articleSaved(article, _) = outcome else {
+            guard case let .articleSaved(article, _, markedTopic) = outcome else {
                 assertionFailure("WritingWorkflow returned an invalid article outcome")
                 return
             }
@@ -1001,6 +1005,9 @@ final class WorkshopStore: ObservableObject {
             }
             self.articleStatus = article.status ?? finalStatus
             self.articles = try self.database.listArticles()
+            if markedTopic != nil {
+                self.topics = try self.database.listTopics()
+            }
             self.draftVersions = try self.database.listDraftVersions(articleID: article.id, limit: 8)
             self.stats = try self.database.overviewStats()
             self.applyPublishingMetrics(try? PublishingMetricsRecorder(database: self.database).snapshot())

@@ -44,6 +44,7 @@ enum EvalError: LocalizedError {
 /// DeepDraftCoordinator / NativeWorkflowCatalog，见 PRD 22.4.2），只在这里做结果形状转换。
 struct PipelineRunner {
     static let pipelineNames = EvalPipelineFacade.pipelineNames
+    static let defaultPipelineNames = EvalPipelineFacade.defaultPipelineNames
 
     let facade: EvalPipelineFacade
 

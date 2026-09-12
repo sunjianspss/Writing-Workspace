@@ -183,7 +183,7 @@ private struct PrePublishAuditCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -215,7 +215,7 @@ private struct EditMetricsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func metric(_ title: String, _ value: String) -> some View {
@@ -349,7 +349,7 @@ private struct AdvisorCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -431,7 +431,7 @@ private struct AgentRunsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func runMeta(_ run: AgentRun) -> some View {
@@ -590,7 +590,7 @@ private struct CoachCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// 18.3.2 验收标准 2：即便"已解决"列表为空，也要有明确展示，不能只字不提。
@@ -1217,7 +1217,7 @@ private struct DimensionTrendsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func trendBar(_ trend: DimensionTrend) -> some View {
@@ -1302,7 +1302,7 @@ private struct ReaderPerspectiveCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func labeledRow(_ title: String, _ value: String) -> some View {
@@ -1367,7 +1367,7 @@ private struct DraftVersionsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func diffDisclosure(_ version: DraftVersion) -> some View {
@@ -1443,7 +1443,7 @@ private struct StatsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func metric(_ label: String, _ value: Int?) -> some View {
@@ -1501,7 +1501,7 @@ private struct TopicsCard: View {
             }
         }
         .padding(12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// 选题去重提示（18.5.2）：与已有选题过于相似的候选不会入库，这里说明被过滤了哪些。

@@ -249,7 +249,7 @@ final class WritingWorkflowTests: XCTestCase {
             payload: articlePayload(title: "新文章", content: "初稿")
         )))
 
-        guard case let .articleSaved(article, overwriteVersion) = outcome else {
+        guard case let .articleSaved(article, overwriteVersion, _) = outcome else {
             return XCTFail("保存必须返回 articleSaved")
         }
         XCTAssertNil(overwriteVersion, "首次保存没有旧定稿，不应制造手工覆盖版本")
@@ -267,7 +267,7 @@ final class WritingWorkflowTests: XCTestCase {
             articleID: nil,
             payload: articlePayload(title: "造船", content: "好版本")
         )))
-        guard case let .articleSaved(article, _) = initial else {
+        guard case let .articleSaved(article, _, _) = initial else {
             return XCTFail("首次保存必须返回 articleSaved")
         }
 
@@ -276,7 +276,7 @@ final class WritingWorkflowTests: XCTestCase {
             payload: articlePayload(title: "造船", content: "降质版本")
         )))
 
-        guard case let .articleSaved(saved, overwriteVersion) = changed else {
+        guard case let .articleSaved(saved, overwriteVersion, _) = changed else {
             return XCTFail("覆盖保存必须返回 articleSaved")
         }
         let version = try XCTUnwrap(overwriteVersion)
@@ -290,7 +290,7 @@ final class WritingWorkflowTests: XCTestCase {
             articleID: article.id,
             payload: articlePayload(title: "造船", content: "降质版本")
         )))
-        guard case let .articleSaved(_, repeatedVersion) = unchanged else {
+        guard case let .articleSaved(_, repeatedVersion, _) = unchanged else {
             return XCTFail("重复保存必须返回 articleSaved")
         }
         XCTAssertNil(repeatedVersion)
@@ -309,7 +309,7 @@ final class WritingWorkflowTests: XCTestCase {
             articleID: nil,
             payload: articlePayload(title: "事务文章", content: "稳定正文")
         )))
-        guard case let .articleSaved(article, _) = initial else {
+        guard case let .articleSaved(article, _, _) = initial else {
             return XCTFail("首次保存必须返回 articleSaved")
         }
 
@@ -371,14 +371,98 @@ final class WritingWorkflowTests: XCTestCase {
         DraftSnapshot(title: title, summary: summary, content: content)
     }
 
-    private func articlePayload(title: String, content: String) -> ArticleSaveRequest {
+    /// 选题写成文章后必须翻「已写」。此前没有任何路径会改动选题状态——选题一律以「待写」
+    /// 入库并永远留在那里，于是列表只增不减：真实库里 123 条全挂「待写」，包括已经写过的
+    /// 那些。列表读起来像债而不是菜单，正是这么来的。
+    func testSavingArticleMarksItsTopicWritten() throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+        let topic = try XCTUnwrap(database.createTopics([
+            TopicPayload(
+                title: "一条选题", direction: "随笔", core_viewpoint: nil, target_reader: nil,
+                description: nil, angle: nil, emotion: nil, score: 4,
+                status: Topic.pendingStatus, tags: []
+            )
+        ]).first)
+        XCTAssertEqual(topic.status, Topic.pendingStatus)
+
+        let outcome = try workflow.execute(.saveArticle(.init(
+            articleID: nil,
+            payload: articlePayload(title: "写成的文章", content: "正文", topicID: topic.id)
+        )))
+
+        guard case let .articleSaved(_, _, markedTopic) = outcome else {
+            return XCTFail("保存必须返回 articleSaved")
+        }
+        XCTAssertEqual(markedTopic?.id, topic.id)
+        XCTAssertEqual(markedTopic?.status, Topic.writtenStatus)
+        XCTAssertEqual(
+            try database.listTopics().first(where: { $0.id == topic.id })?.status,
+            Topic.writtenStatus,
+            "翻转必须真的落库，而不只出现在 outcome 里"
+        )
+    }
+
+    /// 没有关联选题时不该顺手翻掉别人的状态——这是串台修复的另一半。
+    func testSavingArticleWithoutTopicTouchesNoTopic() throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+        let topic = try XCTUnwrap(database.createTopics([
+            TopicPayload(
+                title: "无关的选题", direction: "随笔", core_viewpoint: nil, target_reader: nil,
+                description: nil, angle: nil, emotion: nil, score: 4,
+                status: Topic.pendingStatus, tags: []
+            )
+        ]).first)
+
+        let outcome = try workflow.execute(.saveArticle(.init(
+            articleID: nil,
+            payload: articlePayload(title: "自己想的文章", content: "正文")
+        )))
+
+        guard case let .articleSaved(_, _, markedTopic) = outcome else {
+            return XCTFail("保存必须返回 articleSaved")
+        }
+        XCTAssertNil(markedTopic)
+        XCTAssertEqual(
+            try database.listTopics().first(where: { $0.id == topic.id })?.status,
+            Topic.pendingStatus
+        )
+    }
+
+    /// 关联的选题已被删除时，保存照常成功——翻转只是附带动作，不该让整次保存回滚。
+    func testSavingArticleSurvivesADeletedTopic() throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database)
+        let topic = try XCTUnwrap(database.createTopics([
+            TopicPayload(
+                title: "待删的选题", direction: "随笔", core_viewpoint: nil, target_reader: nil,
+                description: nil, angle: nil, emotion: nil, score: 4,
+                status: Topic.pendingStatus, tags: []
+            )
+        ]).first)
+        try database.deleteTopic(id: topic.id)
+
+        let outcome = try workflow.execute(.saveArticle(.init(
+            articleID: nil,
+            payload: articlePayload(title: "文章", content: "正文", topicID: topic.id)
+        )))
+
+        guard case let .articleSaved(article, _, markedTopic) = outcome else {
+            return XCTFail("选题已删除不该让保存失败")
+        }
+        XCTAssertNil(markedTopic)
+        XCTAssertEqual(article.title, "文章")
+    }
+
+    private func articlePayload(title: String, content: String, topicID: Int? = nil) -> ArticleSaveRequest {
         ArticleSaveRequest(
             title: title,
             content: content,
             summary: "摘要",
             status: "草稿",
             tags: ["测试"],
-            related_topic_id: nil,
+            related_topic_id: topicID,
             genre: "随笔"
         )
     }

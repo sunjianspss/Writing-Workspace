@@ -1258,6 +1258,58 @@ final class WritingWorkflowTopicsTests: XCTestCase {
         XCTAssertTrue(try database.listAgentRuns(limit: 10).isEmpty)
     }
 
+    /// 兜底产物不入库：真实库里 123 条选题有 18 条是 `NativeFallbacks` 的三句模板
+    /// （「{想法}，为什么值得认真写一次」等）套用当前想法生成的，与真选题混在一起、
+    /// 没有任何标记。选题列表一旦不可信，管线的第一站就断了。
+    func testFallbackTopicsAreNotStored() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: FailingTopicsExecutor())
+
+        let outcome = try await workflow.generateTopics(
+            makeRequest(database: database, existingTopics: [])
+        )
+
+        XCTAssertTrue(outcome.created.isEmpty, "调用失败时不得写入任何选题")
+        XCTAssertTrue(outcome.usedFallback)
+        XCTAssertTrue(try database.listTopics().isEmpty, "兜底模板绝不能落库")
+        // 失败的调用本身仍是证据，轨迹要留下——否则作者查不到"那次为什么没出选题"。
+        let runs = try database.listAgentRuns(limit: 10)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.summary, "模型调用失败，未写入任何选题。")
+    }
+
+    /// 兜底时素材不该被标记已用——它并没有被真的用掉。
+    func testFallbackDoesNotConsumeTheSourceIdea() async throws {
+        let database = try makeDatabase()
+        let idea = try database.saveIdea(
+            id: nil,
+            payload: IdeaSaveRequest(
+                title: "一条素材",
+                content: "素材正文",
+                type: "灵感",
+                tags: [],
+                used: 0,
+                related_article_id: nil
+            )
+        )
+        let workflow = WritingWorkflow(database: database, executor: FailingTopicsExecutor())
+
+        _ = try await workflow.generateTopics(
+            makeRequest(
+                database: database,
+                existingTopics: [],
+                actionTitle: "从素材生成选题",
+                markIdeaUsedID: idea.id
+            )
+        )
+
+        XCTAssertEqual(
+            try database.listIdeas().first(where: { $0.id == idea.id })?.used,
+            0,
+            "没生成出选题就把素材标记已用，等于凭空吃掉一条素材"
+        )
+    }
+
     private func makeDatabase() throws -> NativeDatabase {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "topics-\(UUID().uuidString).sqlite3")
@@ -1364,6 +1416,21 @@ private final class TopicsExecutor: AIWorkflowExecuting {
     }
 }
 
+/// 模拟"无 API Key / 调用失败"：交出描述符声明的 fallback，且 success = false。
+/// 这正是真实库里那 18 条模板选题的来路。
+private final class FailingTopicsExecutor: AIWorkflowExecuting {
+    func execute<Output: Codable>(
+        _ descriptor: WorkflowDescriptor<Output>,
+        config: ModelConfig,
+        apiKey: String
+    ) async -> AIRun<Output> {
+        AIRun(
+            result: descriptor.fallback(), elapsedMS: 1, success: false,
+            error: "missing API key", inputSummary: "选题输入", outputSummary: ""
+        )
+    }
+}
+
 /// 自检与补偿回收（24.19）：此前 `polishDraft` 与 `finalizeGeneratedDraft` 各抄了一遍
 /// stage/catch/cleanup，且自检位置一处在工作流内、一处在 Store，是两份会各自漂移的协议。
 @MainActor
@@ -1410,6 +1477,64 @@ final class WritingWorkflowCommitPendingTests: XCTestCase {
 
         XCTAssertEqual(staged?.draftVersionID, delivered.version.id)
         XCTAssertEqual(try database.listDraftVersions(limit: 10).count, 1)
+    }
+
+    /// 回收成功时抛出的必须仍是原始投影错误——那才是作者要处理的那个。
+    func testSuccessfulCleanupStillThrowsTheOriginalProjectionError() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        do {
+            try workflow.commitPending(version: delivered.version, pending: delivered.pending) { _ in
+                throw CommitTestFailure.staleRevision
+            }
+            XCTFail("投影失败必须抛出")
+        } catch CommitTestFailure.staleRevision {
+            // 预期：回收成功，原始错误原样抛出。
+        } catch {
+            XCTFail("回收成功时不应改写错误类型，实际抛出：\(error)")
+        }
+    }
+
+    /// 回收本身也失败时，必须报出遗留的版本号——否则库里那条孤儿记录对作者不可见。
+    func testFailedCleanupSurfacesBothTheProjectionErrorAndTheOrphanedVersion() async throws {
+        let database = try makeDatabase()
+        let workflow = WritingWorkflow(database: database, executor: SelfCheckExecutor())
+        let delivered = try await workflow.selfCheckAndDeliver(
+            selfCheck: makeSelfCheck(database: database),
+            delivery: makeDelivery()
+        )
+
+        // 让回收无从下手：删掉它要操作的表。
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.databaseURL.path, &handle), SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        XCTAssertEqual(sqlite3_exec(handle, "DROP TABLE draft_versions", nil, nil, nil), SQLITE_OK)
+
+        do {
+            try workflow.commitPending(version: delivered.version, pending: delivered.pending) { _ in
+                throw CommitTestFailure.staleRevision
+            }
+            XCTFail("投影与回收都失败时必须抛出")
+        } catch let WritingWorkflow.WorkflowError.pendingCleanupFailed(versionID, projection, _) {
+            XCTAssertEqual(versionID, delivered.version.id, "必须指名遗留的是哪个版本")
+            XCTAssertTrue(
+                projection is CommitTestFailure,
+                "原始投影错误必须被保留，而不是被回收失败盖掉"
+            )
+            let message = try XCTUnwrap(
+                (WritingWorkflow.WorkflowError.pendingCleanupFailed(
+                    versionID: versionID,
+                    projection: projection,
+                    cleanup: CommitTestFailure.staleRevision
+                ) as LocalizedError).errorDescription
+            )
+            XCTAssertTrue(message.contains("#\(delivered.version.id)"), "错误文案要带上版本号：\(message)")
+        }
     }
 
     /// 自检结果必须随 pending 一起落库；分两步写会出现有 pending 无自检的记录。

@@ -532,6 +532,11 @@ package struct Article: Codable, Identifiable, Hashable {
 }
 
 package struct Topic: Codable, Identifiable, Hashable {
+    /// 选题的两个状态。此前这两个字符串散在建表默认值、prompt 种子、兜底和统计查询里，
+    /// 而**没有任何代码会把「待写」改成别的**——选题一律以「待写」入库并永远留在那里。
+    package static let pendingStatus = "待写"
+    package static let writtenStatus = "已写"
+
     package let id: Int
     package var title: String
     package var direction: String?
@@ -872,6 +877,70 @@ package struct WritingReviewResult: Codable, Hashable {
     package var resolved_from_last: [String]?
     /// 本次诊断判定命中的"作者常见雷区"原文描述（22.4.3），由模型显式输出，未命中留空。
     package var pitfall_hits: [String]?
+
+    package init(
+        summary: String? = nil,
+        overall_score: Int? = nil,
+        strengths: [String]? = nil,
+        issues: [WritingReviewIssue]? = nil,
+        revision_plan: [String]? = nil,
+        training_focus: [String]? = nil,
+        style_notes: [String]? = nil,
+        raw_output: String? = nil,
+        resolved_from_last: [String]? = nil,
+        pitfall_hits: [String]? = nil
+    ) {
+        self.summary = summary
+        self.overall_score = overall_score
+        self.strengths = strengths
+        self.issues = issues
+        self.revision_plan = revision_plan
+        self.training_focus = training_focus
+        self.style_notes = style_notes
+        self.raw_output = raw_output
+        self.resolved_from_last = resolved_from_last
+        self.pitfall_hits = pitfall_hits
+    }
+
+    /// `overall_score` 走宽松解码（与 `TopicPayload.score` 同一处理）：示例值改成占位符之后，
+    /// 模型偶尔会把分数当字符串回成 `"83"`。合成 Codable 在这里抛 typeMismatch，**整条诊断**
+    /// 连同 issues 一起解码失败——分数字段的一个类型抖动会赔掉整次调用。
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        overall_score = Self.decodeFlexibleInt(container, key: .overall_score)
+        strengths = try container.decodeIfPresent([String].self, forKey: .strengths)
+        issues = try container.decodeIfPresent([WritingReviewIssue].self, forKey: .issues)
+        revision_plan = try container.decodeIfPresent([String].self, forKey: .revision_plan)
+        training_focus = try container.decodeIfPresent([String].self, forKey: .training_focus)
+        style_notes = try container.decodeIfPresent([String].self, forKey: .style_notes)
+        raw_output = try container.decodeIfPresent(String.self, forKey: .raw_output)
+        resolved_from_last = try container.decodeIfPresent([String].self, forKey: .resolved_from_last)
+        pitfall_hits = try container.decodeIfPresent([String].self, forKey: .pitfall_hits)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case summary
+        case overall_score
+        case strengths
+        case issues
+        case revision_plan
+        case training_focus
+        case style_notes
+        case raw_output
+        case resolved_from_last
+        case pitfall_hits
+    }
+
+    private static func decodeFlexibleInt(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Int? {
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return value
+        }
+        if let text = try? container.decodeIfPresent(String.self, forKey: key) {
+            return Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
 }
 
 package struct WritingReviewIssue: Codable, Identifiable, Hashable {
@@ -1207,6 +1276,58 @@ package struct CandidateScore: Codable, Hashable, Identifiable {
     package var risks: [String]?
 
     package var id: Int { candidate_index }
+
+    package init(
+        candidate_index: Int,
+        score: Int,
+        reason: String,
+        strengths: [String]? = nil,
+        risks: [String]? = nil
+    ) {
+        self.candidate_index = candidate_index
+        self.score = score
+        self.reason = reason
+        self.strengths = strengths
+        self.risks = risks
+    }
+
+    /// 两个整数字段接受"整数"与"能解析成整数的字符串"两种形态。这里比诊断那处更要紧：
+    /// 二者都是**非可选**且整个结构嵌在 `rankings` 数组里——模型把分数回成 `"86"`，合成
+    /// Codable 抛 typeMismatch，赔掉的不是一个字段，是整份候选排序。
+    ///
+    /// 只放宽类型，不放宽"字段缺失"：字段真没有时照旧抛错，让这次调用干净地失败并走 fallback。
+    /// 给它兜一个 0 会造出一条指向不存在候选的排序，比失败更难查。
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        candidate_index = try Self.decodeInt(container, key: .candidate_index)
+        score = try Self.decodeInt(container, key: .score)
+        reason = try container.decode(String.self, forKey: .reason)
+        strengths = try container.decodeIfPresent([String].self, forKey: .strengths)
+        risks = try container.decodeIfPresent([String].self, forKey: .risks)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case candidate_index
+        case score
+        case reason
+        case strengths
+        case risks
+    }
+
+    private static func decodeInt(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> Int {
+        if let value = try? container.decode(Int.self, forKey: key) {
+            return value
+        }
+        if let text = try? container.decode(String.self, forKey: key),
+           let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return value
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) 既不是整数，也不是能解析成整数的字符串"
+        )
+    }
 }
 
 package struct CandidateJudgeResult: Codable, Hashable {

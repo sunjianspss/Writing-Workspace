@@ -85,13 +85,20 @@ extension WorkshopStore {
         }
     }
 
-    func generateTopicsFromIdea(_ idea: Idea) async {
+    /// `direction` 为 nil 时沿用创作页当前的写作方向。
+    ///
+    /// 此前只有"沿用"这一种行为，而素材箱与创作页的方向常常不是一回事：素材箱里攒的是
+    /// AI 相关的东西，创作页可能还停在上一篇随笔的「情感文学」上，于是从 AI 素材生成出
+    /// 一批情感文学选题——方向错了，后面的风格匹配与同体裁样本抽取也跟着错。让调用方
+    /// 在生成那一刻显式说清楚。
+    func generateTopicsFromIdea(_ idea: Idea, direction: String? = nil) async {
         await run("从素材生成选题", cancellable: true) {
             let seed = idea.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             let input = seed?.isEmpty == false ? seed! : String(idea.content.prefix(60))
+            let chosen = direction?.trimmingCharacters(in: .whitespacesAndNewlines)
             var analysis = try self.analysisRequest(template: .topics)
             analysis.context.idea = input
-            analysis.context.direction = self.normalizedDirection
+            analysis.context.direction = (chosen?.isEmpty == false) ? chosen! : self.normalizedDirection
             analysis.context.materials_excerpt = idea.content
             analysis.context.material_count = 1
 
@@ -145,7 +152,9 @@ extension WorkshopStore {
         stats = try? database.overviewStats()
         statusText = topicsGeneratedStatusText(
             created: outcome.created.count,
-            duplicates: outcome.duplicates.count
+            duplicates: outcome.duplicates.count,
+            usedFallback: outcome.usedFallback,
+            error: outcome.error
         )
     }
 
@@ -173,7 +182,19 @@ extension WorkshopStore {
         }
     }
 
-    private func topicsGeneratedStatusText(created: Int, duplicates: Int) -> String {
+    private func topicsGeneratedStatusText(
+        created: Int,
+        duplicates: Int,
+        usedFallback: Bool,
+        error: String
+    ) -> String {
+        // 调用失败时说清楚"没写入"和为什么。此前这一支会落到"没有生成新选题"，读起来
+        // 像模型没想出东西，而实际上多半是 API Key 或网络的问题——作者据此什么也修不了。
+        if usedFallback {
+            let reason = error.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = reason.isEmpty ? "" : "：\(reason)"
+            return "模型调用失败，未写入任何选题\(detail)。请检查设置页的 API Key 与网络后重试。"
+        }
         if created == 0 && duplicates > 0 {
             return "生成的选题都与已有选题重复，已自动过滤"
         }

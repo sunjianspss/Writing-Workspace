@@ -307,6 +307,17 @@ package final class NativeDatabase {
         ).first {
             return matched
         }
+        // 精确落空后按同族再找一次，用的是 `StyleSampleSelector` 已有的那条规则（共享 ≥2 个
+        // 连续汉字）。此前这里只有精确相等，于是作者得为「技术分享」和「科研技术」各建一个
+        // 档案才都能生效——而 `articles.genre` 存的是写作方向原文，本来就碎成六值（24.6）。
+        // 样本抽取早就按同族走了，档案匹配却还卡在精确相等：同一次生成里，样本认同族、
+        // 体裁评价重点不认，两把尺子对不上。
+        if let family = try rows(
+            "\(styleSelectSQL) WHERE genre IS NOT NULL AND genre <> '' ORDER BY updated_at DESC",
+            mapper: style
+        ).first(where: { StyleSampleSelector.isSameGenreFamily($0.genre, trimmed) }) {
+            return family
+        }
         return try defaultStyle()
     }
 
@@ -497,6 +508,17 @@ package final class NativeDatabase {
 
     package func deleteTopic(id: Int) throws {
         try execute("DELETE FROM topics WHERE id = ?", [id])
+    }
+
+    /// 把选题翻成「已写」。幂等；选题已被删除时返回 nil，而不是抛错——它只是保存文章的
+    /// 附带动作，不该因为一条早就删掉的选题让整次保存回滚。
+    package func markTopicWritten(id: Int) throws -> Topic? {
+        guard try topicExists(id: id) else { return nil }
+        try execute(
+            "UPDATE topics SET status = ?, updated_at = ? WHERE id = ?",
+            [Topic.writtenStatus, utcNow(), id]
+        )
+        return try getTopic(id)
     }
 
     package func createTopics(_ payloads: [TopicPayload]) throws -> [Topic] {
@@ -1497,6 +1519,35 @@ package final class NativeDatabase {
                         """
                     )
                 }
+            ),
+            (
+                version: 12,
+                name: "清除历史兜底选题",
+                apply: {
+                    // 在 `generateTopics` 学会拒绝落库之前，无 API Key / 调用失败时
+                    // `NativeFallbacks` 的三句模板会和真选题一样入库。作者库里 123 条选题
+                    // 有 18 条是这么来的，其中"如何写红楼梦的林黛玉？"连问号都被原样嵌进
+                    // 了标题中间（「普通人理解如何写红楼梦的林黛玉？的最小入口」）。
+                    //
+                    // 三个模式都是首尾锚定的整句模板，不是关键词匹配，误伤真选题的可能极低。
+                    // 再加两道保险：只删仍是「待写」的，且只删没有被任何文章引用过的——
+                    // 万一作者真按其中一条写过东西，那条就留着。
+                    try self.execute(
+                        """
+                        DELETE FROM topics
+                        WHERE status = ?
+                          AND id NOT IN (
+                              SELECT related_topic_id FROM articles WHERE related_topic_id IS NOT NULL
+                          )
+                          AND (
+                              title LIKE '%，为什么值得认真写一次'
+                              OR title LIKE '普通人理解%的最小入口'
+                              OR title LIKE '我重新看待%之后，发现它并不遥远'
+                          )
+                        """,
+                        [Topic.pendingStatus]
+                    )
+                }
             )
         ]
 
@@ -2138,7 +2189,7 @@ package final class NativeDatabase {
 }
 
 private let nativeDatabaseLegacyBaselineVersion = 10
-private let nativeDatabaseSchemaVersion = 11
+private let nativeDatabaseSchemaVersion = 12
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 private let topicSelectSQL = """
