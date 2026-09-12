@@ -29,6 +29,8 @@ This file records user-visible changes. Versions follow Semantic Versioning; pub
 - Outline-to-draft generation moved into a `WritingWorkflow` slice, completing the migration: `WorkshopStore` no longer invokes any AI workflow directly.
 - The app ships an icon. It is drawn programmatically so the 16- and 32-pixel variants can be simplified rather than shrunk, and both the development and release bundles now carry it; the release validator rejects a bundle whose icon file is missing.
 - Copy-to-WeChat now carries the selected theme's own ground, type scale, letter spacing and padding into the pasted article. It previously emitted a fixed white ground at 16px regardless of theme, so every theme but three pasted as the same generic article.
+- Scores are no longer pulled toward the number that happened to appear in a prompt's output example. Diagnosis showed a literal score in its example (72 in the app, 83 in evaluation); across four evaluation runs the example's value was also the single most common score awarded, and moving it moved the most common score with it. Topic ratings and rewrite-candidate rankings carried the same kind of example value. All four are now placeholders, and candidate ranking states its 0–100 range in the instructions rather than leaving the example to imply it. Diagnosis scores from earlier runs are not comparable with new ones.
+- A score that comes back as text rather than a number no longer discards the whole result. Previously the score field alone could fail decoding and take the surrounding issue list, revision plan, or candidate ranking down with it. A score that is genuinely absent still fails, rather than being silently read as zero.
 
 ### Fixed
 

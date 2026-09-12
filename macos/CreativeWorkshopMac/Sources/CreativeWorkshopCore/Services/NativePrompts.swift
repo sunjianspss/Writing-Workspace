@@ -336,6 +336,10 @@ package enum NativePrompts {
     /// 只剩下面 `writingReview` 种子一个消费者，常量留着是为了让"改锚点改哪里"仍然只有一个答案。
     /// 注意评测量具（`EvalPipelineFacade.scoringTemplate`）另有一份措辞相近的锚点，那份是
     /// **有意不合并**的，理由见那里的注释。
+    ///
+    /// 光有这段锚点不够：真正决定分数落在哪一格的是输出示例里的 overall_score 值。所以
+    /// `writingReview` 种子的示例保持占位符（原为 72），不许填回具体数字——同理见
+    /// `EvalPipelineFacade.scoringTemplate` 的注释。
     static let scoreAnchorBlock = """
     评分锚点（必须落到锚点上，不要给 70 分档的"安全分"）：
     - 90–100：可直接发表。结构完整推进、细节具体真实、无任何高危问题、无腔调问题
@@ -657,9 +661,9 @@ package enum NativePrompts {
                 【素材】{{materials}}
                 【作者风格】{{style_description}}
 
-                要求：标题自然不标题党；有真实痛点；有个人表达空间；推荐指数 1-5。
-                请只输出 JSON：
-                {"topics":[{"title":"标题","description":"一句话说明","core_viewpoint":"核心观点","target_reader":"目标读者","angle":"推荐角度","emotion":"情绪强度","score":4,"direction":"{{direction}}","status":"待写","tags":["标签1"]}]}
+                要求：标题自然不标题党；有真实痛点；有个人表达空间；推荐指数 1-5，不同选题的推荐指数要拉开。
+                请只输出 JSON（尖括号是占位说明，输出时替换成实际值，score 必须是不带引号的整数）：
+                {"topics":[{"title":"标题","description":"一句话说明","core_viewpoint":"核心观点","target_reader":"目标读者","angle":"推荐角度","emotion":"情绪强度","score":<推荐指数，1-5 的整数>,"direction":"{{direction}}","status":"待写","tags":["标签1"]}]}
                 """
             ),
             PromptTemplateSeed(
@@ -776,8 +780,8 @@ package enum NativePrompts {
 
                 \(scoreAnchorBlock)
 
-                请只输出 JSON：
-                {"summary":"一句话诊断","overall_score":72,"strengths":["优点"],"issues":[{"dimension":"维度","severity":"高/中/低","excerpt":"原文片段","problem":"问题","suggestion":"建议"}],"revision_plan":["修改步骤"],"training_focus":["训练重点"],"style_notes":["风格观察"],"resolved_from_last":["上一次诊断中这次已解决的问题，没有历史或没有解决的留空数组"],"pitfall_hits":["命中的雷区原文描述，未命中留空数组"]}
+                请只输出 JSON（尖括号是占位说明，输出时替换成实际值，overall_score 必须是不带引号的整数）：
+                {"summary":"一句话诊断","overall_score":<按上面评分锚点确定的整数>,"strengths":["优点"],"issues":[{"dimension":"维度","severity":"高/中/低","excerpt":"原文片段","problem":"问题","suggestion":"建议"}],"revision_plan":["修改步骤"],"training_focus":["训练重点"],"style_notes":["风格观察"],"resolved_from_last":["上一次诊断中这次已解决的问题，没有历史或没有解决的留空数组"],"pitfall_hits":["命中的雷区原文描述，未命中留空数组"]}
                 """
             ),
             PromptTemplateSeed(
@@ -932,8 +936,9 @@ package enum NativePrompts {
                 【作者风格】{{style_description}}
 
                 请按真实经验保留、体裁评价重点、作者雷区、编辑偏好、结构推进和虚构风险排序。
-                请只输出 JSON：
-                {"best_candidate_index":1,"summary":"选择理由","rankings":[{"candidate_index":1,"score":86,"reason":"排序理由","strengths":["优点"],"risks":["风险"]}]}
+                score 用 0-100 表示这一版的整体可用度，不同候选的分数要拉开，不要都给同一档。
+                请只输出 JSON（尖括号是占位说明，输出时替换成实际值，score 必须是不带引号的整数）：
+                {"best_candidate_index":1,"summary":"选择理由","rankings":[{"candidate_index":1,"score":<0-100 的整数>,"reason":"排序理由","strengths":["优点"],"risks":["风险"]}]}
                 """
             ),
             PromptTemplateSeed(

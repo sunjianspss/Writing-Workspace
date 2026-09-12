@@ -49,6 +49,80 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertNil(review.pitfall_hits)
     }
 
+    /// 分数回成字符串时不许赔掉整条诊断。
+    ///
+    /// 输出示例里的 overall_score 从固定数字改成占位符之后，模型偶尔会把它当字符串回成 "83"。
+    /// 合成 Codable 在这里抛 typeMismatch，issues / revision_plan 一起解码失败——一个字段的
+    /// 类型抖动赔掉整次调用。分数字段因此走宽松解码（与 TopicPayload.score 同一处理）。
+    func testWritingReviewResultDecodesStringifiedScoreWithoutLosingTheRest() throws {
+        let data = """
+        {
+          "summary": "结构清楚。",
+          "overall_score": " 83 ",
+          "issues": [
+            {
+              "dimension": "开头",
+              "severity": "高",
+              "problem": "进入太抽象。",
+              "suggestion": "先写一个具体场景。"
+            }
+          ],
+          "revision_plan": ["补开头"]
+        }
+        """.data(using: .utf8)!
+
+        let review = try JSONDecoder().decode(WritingReviewResult.self, from: data)
+
+        XCTAssertEqual(review.overall_score, 83)
+        XCTAssertEqual(review.issues?.count, 1, "分数字段的类型抖动不应连累 issues")
+        XCTAssertEqual(review.revision_plan, ["补开头"])
+    }
+
+    /// 分数确实无法解析时留 nil，而不是抛错——评测侧靠 nil 触发重评（EvalPipelineFacade）。
+    func testWritingReviewResultKeepsNilScoreWhenUnparseable() throws {
+        let data = """
+        {"summary":"结构清楚。","overall_score":"<按上面评分锚点确定的整数>","issues":[]}
+        """.data(using: .utf8)!
+
+        let review = try JSONDecoder().decode(WritingReviewResult.self, from: data)
+
+        XCTAssertNil(review.overall_score)
+        XCTAssertEqual(review.summary, "结构清楚。")
+    }
+
+    /// 候选排序里的分数回成字符串时不许赔掉整份排序。
+    ///
+    /// `CandidateScore` 的 candidate_index / score 都是非可选且嵌在 rankings 数组里，
+    /// 一个类型抖动会让整个 CandidateJudgeResult 解码失败。
+    func testCandidateJudgeResultDecodesStringifiedScores() throws {
+        let data = """
+        {
+          "best_candidate_index": 2,
+          "summary": "第二版更克制。",
+          "rankings": [
+            {"candidate_index": "1", "score": "78", "reason": "略显铺陈"},
+            {"candidate_index": 2, "score": 86, "reason": "细节更实"}
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let result = try JSONDecoder().decode(CandidateJudgeResult.self, from: data)
+
+        XCTAssertEqual(result.rankings.count, 2, "一条 ranking 的类型抖动不应连累另一条")
+        XCTAssertEqual(result.rankings.first?.candidate_index, 1)
+        XCTAssertEqual(result.rankings.first?.score, 78)
+        XCTAssertEqual(result.bestReason, "细节更实")
+    }
+
+    /// 只放宽类型，不放宽字段缺失：score 真没有时照旧抛错，让调用干净地失败并走 fallback。
+    func testCandidateScoreStillFailsWhenScoreIsMissing() {
+        let data = """
+        {"rankings":[{"candidate_index":1,"reason":"没有分数"}]}
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(CandidateJudgeResult.self, from: data))
+    }
+
     /// 诊断 JSON 含 pitfall_hits 字段（模型显式命中作者雷区，PRD 22.4.3）时应可解码。
     func testWritingReviewResultDecodesWithPitfallHits() throws {
         let data = """
