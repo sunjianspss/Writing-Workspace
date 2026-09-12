@@ -17,7 +17,13 @@ enum ReleaseGate {
         let deep = outcomes.filter { $0.pipeline == deepPipelineName }
 
         guard !agentic.isEmpty, !deep.isEmpty else {
-            return Verdict(passed: false, lines: ["放行门：暂无 agentic 管线数据"])
+            // agentic 自 23.6.6 终判起不在默认管线里，所以"没有数据"的常态含义已经从
+            // "还没接进来"变成了"这一轮没跑它"。措辞跟着改：否则每份报告都会挂一条读起来
+            // 像悬而未决的"暂无数据 → 不通过"，与已经归档的裁决打架。
+            return Verdict(
+                passed: false,
+                lines: ["放行门：本轮未跑 agentic 管线（23.6.6 已终判 L2 不转默认；复议时用 --pipelines 带上 agentic 重跑）"]
+            )
         }
 
         // 分数只算成功样本（24.9）：放行门是 L2 转默认的唯一裁决依据，一次网络超时就能把

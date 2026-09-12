@@ -3,7 +3,7 @@ import CreativeWorkshopCore
 
 func run() async -> Int32 {
     let arguments = CommandLine.arguments
-    var pipelines = PipelineRunner.pipelineNames
+    var pipelines = PipelineRunner.defaultPipelineNames
     if let flagIndex = arguments.firstIndex(of: "--pipelines"), arguments.count > flagIndex + 1 {
         let requested = arguments[flagIndex + 1]
             .split(separator: ",")

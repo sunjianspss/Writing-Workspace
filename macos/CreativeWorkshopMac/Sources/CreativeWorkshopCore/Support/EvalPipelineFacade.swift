@@ -60,7 +60,16 @@ package enum EvalFacadeError: LocalizedError {
 }
 
 package struct EvalPipelineFacade {
+    /// 全部**合法**管线：`--pipelines` 的取值校验用这一份，agentic 始终在内。
     package static let pipelineNames = ["direct", "agent", "deep", "agentic"]
+
+    /// 不带 `--pipelines` 时**默认跑**的管线。agentic 不在其中（23.6.6 终判：L2 不转默认）。
+    ///
+    /// 它不是被删掉，是不再每轮白跑四分之一：agentic 单格调用最贵（最近一轮 11.76 次 vs
+    /// deep 8.83），而放行门第一项在三轮里从"明确落后"走到"判不出"就停住了——要真判出
+    /// 那 0.73 分的差距需要每管线约 174 例，是现在的 6 倍。为一个默认关闭的入口付这个价钱
+    /// 不划算。复议时显式 `--pipelines direct,agent,deep,agentic` 即可，放行门照常判定。
+    package static let defaultPipelineNames = ["direct", "agent", "deep"]
 
     /// 评测评分专用锚点模板（评测仪器修缮）：只在 eval 路径生效，不改动 App 内写作教练的
     /// 默认 prompt。目的：迫使分数按分档锚点给出、与问题清单互相一致，避免评分向 70 分档塌缩。

@@ -64,7 +64,7 @@ macOS / SwiftUI App（两列外壳：导航列 + 内容列）
 | Keychain | `KeychainCredentialStore.swift` | API Key 安全存储 |
 | 验证入口 | `script/verify.sh` + `script/architecture_guard.sh` | 提交前单条命令：架构守卫 + 全量单元测试 |
 | 运行脚本 | `script/build_and_run.sh` | 构建并启动 `.app` |
-| 写作质量评测 | `Sources/CreativeWorkshopEval` + `evals/` | 独立 CLI，跑 direct/agent/deep/agentic 四条管线，锚点评分 + 放行门判定（PRD 22.4.2 / 23.4） |
+| 写作质量评测 | `Sources/CreativeWorkshopEval` + `evals/` | 独立 CLI，默认跑 direct/agent/deep 三条管线（agentic 已退出默认集），锚点评分 + 放行门判定（PRD 22.4.2 / 23.4） |
 | 配对重判 | `RejudgeRunner.swift` + `RejudgeReport.swift` + `RejudgeStore.swift` | 拿存量正文只重跑评分，配对对照验证评分侧改动（PRD 24.14） |
 | 半自动调度 | `AdvisorPlanRunner.swift` + `agent_runs` | 按「智能下一步」计划顺序执行动作，待复核处暂停（PRD 23.5，L1.5） |
 | 代理会话（实验室） | `WritingAgentCoordinator.swift` + `agent_lab_enabled` / `agent_call_budget` | L2 有界决策循环：模型选动作、护栏管预算与熔断，产物进待复核；默认关闭，评测放行门达标才转默认（PRD 23.6） |
@@ -252,16 +252,16 @@ AIWorkflowRunner returns success=false + declared fallback result
 
 ## 评测子系统
 
-独立于主 App 的 CLI，从 `evals/cases/` 读取 28 个用例，分别跑 `direct` / `agent` / `deep` / `agentic` 四条管线并用写作诊断打分，结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。它与主 App 的唯一接缝是 `EvalPipelineFacade.swift`：只暴露评测所需的输入输出，不为了评测放宽任何既有内部类型的访问级别。
+独立于主 App 的 CLI，从 `evals/cases/` 读取 28 个用例，默认跑 `direct` / `agent` / `deep` 三条管线并用写作诊断打分，结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。它与主 App 的唯一接缝是 `EvalPipelineFacade.swift`：只暴露评测所需的输入输出，不为了评测放宽任何既有内部类型的访问级别。
 
 需要先在 App 设置页配置好 API Key；没有 Key 时直接报错退出，不会静默走本地 fallback。失败样本（超时、连接中断等）不打分，报告头点名「无效样本」，不计入差值也不进放行门。
 
 ```bash
-swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --pipelines direct,agent,deep,agentic
+swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval
 swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --resume
 ```
 
-全量一轮（28 用例 × 4 管线）约 8 小时；`--resume` 续跑最近一次 run，已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮。
+全量一轮（28 用例 × 3 管线）约 6 小时；`--resume` 续跑最近一次 run，已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮。
 
 ### 配对重判（PRD 24.14）
 

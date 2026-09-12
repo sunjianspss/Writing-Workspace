@@ -79,13 +79,13 @@ env SWIFTPM_CONFIG_PATH="$PWD/.swiftpm-state/config" \
   swift test --disable-sandbox --package-path macos/CreativeWorkshopMac
 ```
 
-写作质量评测（PRD 22.4.2）：独立于主 App 的 CLI，从 `evals/cases/` 读取用例，分别跑 direct/agent/deep/agentic 四条管线并用写作诊断打分，结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。需要先在 App 设置页配置好 API Key（保存在 Keychain）；没有 Key 时会直接报错退出，不会静默走本地 fallback。
+写作质量评测（PRD 22.4.2）：独立于主 App 的 CLI，从 `evals/cases/` 读取用例，默认跑 direct/agent/deep 三条管线并用写作诊断打分（agentic 自 23.6.6 终判起退出默认集，仍可显式指定），结果写入 `evals/eval_results.sqlite3`，报告写入 `evals/reports/`。需要先在 App 设置页配置好 API Key（保存在 Keychain）；没有 Key 时会直接报错退出，不会静默走本地 fallback。
 
 ```bash
-swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --pipelines direct,agent,deep,agentic
+swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval
 ```
 
-全量一轮（28 用例 × 4 管线）约 8 小时。中断后用 `--resume` 续跑最近一次 run：已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮（PRD 24.9）。
+全量一轮（28 用例 × 3 管线）约 6 小时；带上 `--pipelines direct,agent,deep,agentic` 复议 L2 则约 8 小时。中断后用 `--resume` 续跑最近一次 run：已成功的格子跳过，失败的格子重跑，报告按同一 run_id 补成整轮（PRD 24.9）。
 
 ```bash
 swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --resume
