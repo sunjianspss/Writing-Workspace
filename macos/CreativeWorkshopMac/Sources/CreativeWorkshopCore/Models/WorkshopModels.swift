@@ -532,6 +532,11 @@ package struct Article: Codable, Identifiable, Hashable {
 }
 
 package struct Topic: Codable, Identifiable, Hashable {
+    /// 选题的两个状态。此前这两个字符串散在建表默认值、prompt 种子、兜底和统计查询里，
+    /// 而**没有任何代码会把「待写」改成别的**——选题一律以「待写」入库并永远留在那里。
+    package static let pendingStatus = "待写"
+    package static let writtenStatus = "已写"
+
     package let id: Int
     package var title: String
     package var direction: String?

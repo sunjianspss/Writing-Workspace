@@ -14,7 +14,7 @@ final class NativeDatabaseTests: XCTestCase {
         let stats = try database.overviewStats()
         XCTAssertEqual(stats.article_total, 0)
         XCTAssertEqual(stats.topic_total, 0)
-        XCTAssertEqual(try database.schemaVersion(), 11)
+        XCTAssertEqual(try database.schemaVersion(), 12)
     }
 
     func testVersionedMigrationCreatesBackupThatCanRestorePreMigrationData() throws {
@@ -22,11 +22,11 @@ final class NativeDatabaseTests: XCTestCase {
         let backupURL = NativeDatabase.migrationBackupURL(
             for: databaseURL,
             fromVersion: 10,
-            toVersion: 11
+            toVersion: 12
         )
 
         var migratedDatabase: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try migratedDatabase?.schemaVersion(), 11)
+        XCTAssertEqual(try migratedDatabase?.schemaVersion(), 12)
         XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
 
         _ = try migratedDatabase?.saveArticle(
@@ -46,7 +46,7 @@ final class NativeDatabaseTests: XCTestCase {
         try NativeDatabase.restoreMigrationBackup(at: backupURL, to: databaseURL)
 
         let restoredDatabase = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try restoredDatabase.schemaVersion(), 11)
+        XCTAssertEqual(try restoredDatabase.schemaVersion(), 12)
         XCTAssertEqual(try restoredDatabase.listArticles().first?.title, "迁移前标题")
     }
 
@@ -59,7 +59,7 @@ final class NativeDatabaseTests: XCTestCase {
 
         do {
             _ = try NativeDatabase(databaseURL: databaseURL)
-            XCTFail("缺少 name/applied_at 的迁移历史表应让 v11 迁移失败")
+            XCTFail("缺少 name/applied_at 的迁移历史表应让迁移失败")
         } catch let NativeDatabaseError.migrationFailed(
             fromVersion,
             toVersion,
@@ -68,7 +68,7 @@ final class NativeDatabaseTests: XCTestCase {
             _
         ) {
             XCTAssertEqual(fromVersion, 10)
-            XCTAssertEqual(toVersion, 11)
+            XCTAssertEqual(toVersion, 12)
             XCTAssertTrue(restored)
             XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
         }
@@ -77,7 +77,7 @@ final class NativeDatabaseTests: XCTestCase {
         // 失败尝试没有推进版本、删除文章或留下半迁移状态。
         try executeRawSQL("DROP TABLE schema_migrations;", at: databaseURL)
         let recoveredDatabase = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try recoveredDatabase.schemaVersion(), 11)
+        XCTAssertEqual(try recoveredDatabase.schemaVersion(), 12)
         XCTAssertEqual(try recoveredDatabase.listArticles().first?.title, "失败前仍需保留")
     }
 
@@ -124,7 +124,7 @@ final class NativeDatabaseTests: XCTestCase {
 
         let database = try NativeDatabase(databaseURL: databaseURL)
 
-        XCTAssertEqual(try database.schemaVersion(), 11)
+        XCTAssertEqual(try database.schemaVersion(), 12)
         let version = try database.saveDraftVersion(
             articleID: nil,
             titleSnapshot: "真实旧库",
@@ -1098,6 +1098,56 @@ final class NativeDatabaseTests: XCTestCase {
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return try NativeDatabase(databaseURL: directory.appending(path: "creative_workshop.sqlite3"))
+    }
+
+    /// 迁移 v12：清除历史兜底选题。三句模板是首尾锚定的整句，真选题不该被误伤；
+    /// 已被文章引用过的、以及已经翻成「已写」的也都要留着。
+    func testVersion12MigrationRemovesFallbackTopicsButSparesRealOnes() throws {
+        let (databaseURL, articleID) = try makeVersion10Database(articleTitle: "已有文章")
+
+        // 先用一个 v10 库把选题塞进去，再让它升到 v12。
+        var seeding: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
+        let seeded = try XCTUnwrap(seeding).createTopics([
+            fallbackTopicPayload(title: "自由自在如何定义，为什么值得认真写一次"),
+            fallbackTopicPayload(title: "普通人理解自由自在如何定义的最小入口"),
+            fallbackTopicPayload(title: "我重新看待自由自在如何定义之后，发现它并不遥远"),
+            fallbackTopicPayload(title: "普通人理解如何写红楼梦的林黛玉？的最小入口"),
+            fallbackTopicPayload(title: "黛玉葬的不是花，是怕被忘记的那一点自我"),
+            fallbackTopicPayload(title: "和 AI 协作，最难的不是学提示词而是修炼品味"),
+            fallbackTopicPayload(title: "被引用过的模板选题，为什么值得认真写一次")
+        ])
+        let referenced = try XCTUnwrap(seeded.last)
+        _ = try XCTUnwrap(seeding).saveArticle(
+            id: articleID,
+            payload: ArticleSaveRequest(
+                title: "已有文章", content: "正文", summary: "摘要", status: "草稿",
+                tags: [], related_topic_id: referenced.id, genre: "情感文学"
+            )
+        )
+        seeding = nil
+        try executeRawSQL("DROP TABLE IF EXISTS schema_migrations; PRAGMA user_version = 10;", at: databaseURL)
+
+        let migrated = try NativeDatabase(databaseURL: databaseURL)
+
+        XCTAssertEqual(try migrated.schemaVersion(), 12)
+        let remaining = Set(try migrated.listTopics().map(\.title))
+        XCTAssertEqual(
+            remaining,
+            [
+                "黛玉葬的不是花，是怕被忘记的那一点自我",
+                "和 AI 协作，最难的不是学提示词而是修炼品味",
+                "被引用过的模板选题，为什么值得认真写一次"
+            ],
+            "只该删掉未被引用的整句模板；真选题与已被文章引用的必须留下"
+        )
+    }
+
+    private func fallbackTopicPayload(title: String) -> TopicPayload {
+        TopicPayload(
+            title: title, direction: "小红书文案", core_viewpoint: nil, target_reader: nil,
+            description: nil, angle: nil, emotion: nil, score: 4,
+            status: Topic.pendingStatus, tags: []
+        )
     }
 
     private func makeVersion10Database(articleTitle: String) throws -> (URL, Int) {

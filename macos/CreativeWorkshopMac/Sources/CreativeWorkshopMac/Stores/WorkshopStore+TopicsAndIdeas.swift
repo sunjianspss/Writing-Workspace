@@ -145,7 +145,9 @@ extension WorkshopStore {
         stats = try? database.overviewStats()
         statusText = topicsGeneratedStatusText(
             created: outcome.created.count,
-            duplicates: outcome.duplicates.count
+            duplicates: outcome.duplicates.count,
+            usedFallback: outcome.usedFallback,
+            error: outcome.error
         )
     }
 
@@ -173,7 +175,19 @@ extension WorkshopStore {
         }
     }
 
-    private func topicsGeneratedStatusText(created: Int, duplicates: Int) -> String {
+    private func topicsGeneratedStatusText(
+        created: Int,
+        duplicates: Int,
+        usedFallback: Bool,
+        error: String
+    ) -> String {
+        // 调用失败时说清楚"没写入"和为什么。此前这一支会落到"没有生成新选题"，读起来
+        // 像模型没想出东西，而实际上多半是 API Key 或网络的问题——作者据此什么也修不了。
+        if usedFallback {
+            let reason = error.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = reason.isEmpty ? "" : "：\(reason)"
+            return "模型调用失败，未写入任何选题\(detail)。请检查设置页的 API Key 与网络后重试。"
+        }
         if created == 0 && duplicates > 0 {
             return "生成的选题都与已有选题重复，已自动过滤"
         }
