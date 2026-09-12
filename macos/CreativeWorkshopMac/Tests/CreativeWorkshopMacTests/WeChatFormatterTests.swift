@@ -105,16 +105,13 @@ final class WeChatFormatterTests: XCTestCase {
         try assertValidJavaScript(WeChatFormatterController.bridgeScript)
     }
 
-    /// 复制到公众号时的颜色兜底逻辑是纯函数，直接在 JSContext 里跑真实实现。
-    /// 这三条断言各自对应一个真实修过的故障：
-    /// 1. 半透明底色必须压平成实色——公众号丢掉 alpha 会把 rgba(255,107,0,.1) 渲染成实心橙；
-    /// 2. 深色纸底上的浅色前景不能被"修正"掉，否则暗夜护眼的标题会被压黑；
-    /// 3. 白底上的近白前景必须被压深，否则粘出去就是白底白字。
-    func testWechatCopyColorFallbacksSurviveHostileEditors() throws {
+    /// 复制到公众号时的半透明压平是纯函数，直接在 JSContext 里跑真实实现。
+    /// 公众号编辑器可能丢掉 alpha，把 rgba(…) 当实心色渲染：万圣节 15% 的橙会
+    /// 变成纯橙，tech 的半透明边框会变成实线亮边。所以复制前必须按主题纸底压平。
+    func testWechatCopyFlattensTranslucentColorsAgainstThemePaper() throws {
         let html = try String(contentsOf: WeChatFormatterResource.htmlURL(), encoding: .utf8)
-        let helpers = ["rgbToHex", "flattenColorToHex", "copyContrastRatio", "ensureCopyContrast"]
-        var source = "var activeWechatCopyBg = '#ffffff';\n"
-        for name in helpers {
+        var source = ""
+        for name in ["hexToRgbTriplet", "flattenWechatAlpha"] {
             let start = try XCTUnwrap(html.range(of: "        function \(name)("))
             let end = try XCTUnwrap(html.range(of: "\n        }\n", range: start.lowerBound..<html.endIndex))
             source += String(html[start.lowerBound..<end.upperBound]) + "\n"
@@ -128,24 +125,42 @@ final class WeChatFormatterTests: XCTestCase {
         XCTAssertNil(context.exception)
 
         func evaluate(_ expression: String) throws -> String {
-            let value = try XCTUnwrap(context.evaluateScript(expression))
-            return value.toString() ?? ""
+            try XCTUnwrap(XCTUnwrap(context.evaluateScript(expression)).toString())
         }
 
-        // 1. 万圣节/圣诞节的底色是半透明的，必须按叠在白纸上压平
-        XCTAssertEqual(try evaluate("flattenColorToHex('rgba(255, 107, 0, 0.1)')"), "#fff0e6")
-        XCTAssertEqual(try evaluate("flattenColorToHex('rgb(13, 17, 23)')"), "#0d1117")
+        // 万圣节那种 15% 的橙，叠在浅纸上压平后仍是浅橙，而不是实心橙
+        XCTAssertEqual(try evaluate("flattenWechatAlpha('rgba(255, 107, 0, 0.1)', '#ffffff')"), "#fff0e6")
 
-        // 2. 深色纸底上的浅色标题要原样保留（暗夜护眼 h1 = #f0f6fc）
-        context.evaluateScript("activeWechatCopyBg = '#0d1117';")
-        XCTAssertEqual(try evaluate("ensureCopyContrast('#f0f6fc')"), "#f0f6fc")
+        // 同一个颜色叠在深色纸上必须得到不同结果——证明压平真的用了纸底，
+        // 而不是一律按白底算
+        let onDark = try evaluate("flattenWechatAlpha('rgba(255, 107, 0, 0.1)', '#0d1117')")
+        XCTAssertNotEqual(onDark, "#fff0e6", "深色纸底上的压平结果不能和白底相同")
 
-        // 3. 白纸底上的近白前景必须被压深到看得清
-        context.evaluateScript("activeWechatCopyBg = '#ffffff';")
-        let rescued = try evaluate("ensureCopyContrast('#f0f6fc')")
-        XCTAssertNotEqual(rescued, "#f0f6fc", "白底上的近白色必须被压深")
-        let ratio = try evaluate("copyContrastRatio('\(rescued)', '#ffffff')")
-        XCTAssertGreaterThanOrEqual(Double(ratio) ?? 0, 3.0, "压深后至少要到 3:1")
+        // 半透明还藏在 border 简写和渐变色标里（实测 tech 主题 22 处 rgba 中有
+        // 16 处在 border-*、1 处在 background-image），必须整串替换
+        let border = try evaluate("flattenWechatAlpha('1px solid rgba(0, 217, 255, 0.3)', '#1a1a2e')")
+        XCTAssertFalse(border.contains("rgba("), "border 简写里的 rgba 必须一并压平")
+        XCTAssertTrue(border.hasPrefix("1px solid #"), "压平后应保持 border 简写结构：\(border)")
+
+        // 全透明必须保持透明。压成底色会毁掉多层背景的层叠——网格笔记的格子是两层
+        // 渐变叠加，上层原本透明的部分若变成实心底色，会把下层横线整片盖掉，
+        // 粘到公众号后网格整个消失（真实反馈修过一次）。
+        XCTAssertEqual(try evaluate("flattenWechatAlpha('rgba(0, 0, 0, 0)', '#fefefe')"), "transparent")
+        XCTAssertEqual(
+            try evaluate("flattenWechatAlpha('linear-gradient(rgba(200,200,200,0.1) 1px, rgba(0,0,0,0) 1px)', '#fefefe')")
+                .contains("transparent") ? "保留" : "被压平",
+            "保留",
+            "渐变里的全透明色标必须保留"
+        )
+
+        // 不含 alpha 的值必须原样返回，压平不能顺手改写别的东西
+        XCTAssertEqual(try evaluate("flattenWechatAlpha('1px solid #dccdb4', '#faf6ee')"), "1px solid #dccdb4")
+
+        // 源码级守卫：rgbToHex 不得再把 rgba(…) 原样吐出去
+        let rgbToHexStart = try XCTUnwrap(html.range(of: "        function rgbToHex("))
+        let rgbToHexEnd = try XCTUnwrap(html.range(of: "\n        }\n", range: rgbToHexStart.lowerBound..<html.endIndex))
+        let rgbToHexBody = String(html[rgbToHexStart.lowerBound..<rgbToHexEnd.upperBound])
+        XCTAssertTrue(rgbToHexBody.contains("flattenWechatAlpha"), "rgbToHex 必须把半透明压平后再返回")
     }
 
     private func assertValidJavaScript(_ script: String) throws {

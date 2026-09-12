@@ -907,7 +907,6 @@ final class WeChatFormatterController: NSObject, ObservableObject {
                 width: min(100%, 780px) !important;
                 min-height: calc(100vh - 56px) !important;
                 margin: 0 auto !important;
-                background-color: #fff;
                 box-shadow: 0 10px 32px rgba(15, 23, 42, 0.12);
             }
             body.creative-workshop-embedded .toast {
