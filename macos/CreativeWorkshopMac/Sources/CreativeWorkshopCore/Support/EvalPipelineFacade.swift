@@ -68,10 +68,57 @@ package struct EvalPipelineFacade {
     /// 这里的锚点文案与 `NativePrompts.scoreAnchorBlock` 高度相似，但**不要合并**：那份是被测
     /// 对象（App 的写作教练 prompt，会随质量迭代改动），这份是量具。量具跟着被测对象一起变，
     /// 跨轮分数就不可比了。改这份 = 作废历史基线，要和换风格样本、换 prompt 同等对待。
-    package static let scoringTemplate = PromptTemplate(
+    ///
+    /// **输出示例里的 overall_score 必须保持占位符，不许填具体数字。** 示例值本身就是最强的
+    /// 锚点：示例写 72 那一轮，23 个有效样本里 12 个正好给 72；改成 83 之后，众数当场搬到 83
+    /// （100 个样本里 41 个）。分档文案负责挡住 80 分线，示例数字负责决定落在哪一格——留一个
+    /// 数字在这儿，等于把评分结果写死在 prompt 里。
+    /// 评分模板的受控变量（24.14）：两个臂**只差输出示例里的那一个 token**，正文共用下面
+    /// 同一份字符串。把"改动前的版本"留在代码里而不是留在 git 历史里，是为了让 A/B 随时可复跑
+    /// ——否则每次对照都要切分支重新构建，成本高到不会真去做。
+    ///
+    /// 这不违反"内置 prompt 只有一份文案"：正文确实只有一份，变的只有示例位。
+    package enum ScoringVariant: String, CaseIterable, Sendable {
+        /// 改动前：示例里写死 83。100 个样本里 41 个正好给 83。
+        case anchored83
+        /// 改动后：示例位是占位符。
+        case placeholder
+
+        package var scoreExample: String {
+            switch self {
+            case .anchored83: return "83"
+            case .placeholder: return "<按第 2 步锚点确定的整数>"
+            }
+        }
+
+        package var outputNote: String {
+            switch self {
+            case .anchored83:
+                return "请只输出 JSON，不要输出 Markdown 代码块："
+            case .placeholder:
+                return """
+                请只输出 JSON，不要输出 Markdown 代码块。尖括号是占位说明，输出时替换成实际值，
+                overall_score 必须是不带引号的整数：
+                """
+            }
+        }
+
+        package var displayName: String {
+            switch self {
+            case .anchored83: return "示例值 83（改动前）"
+            case .placeholder: return "占位符（改动后）"
+            }
+        }
+    }
+
+    /// 主评分路径固定用 `.placeholder`；`.anchored83` 只供 `--rejudge` 的对照臂使用。
+    package static let scoringTemplate = scoringTemplate(variant: .placeholder)
+
+    package static func scoringTemplate(variant: ScoringVariant) -> PromptTemplate {
+        PromptTemplate(
         id: -1,
         key: PromptTemplateKey.writingReview.rawValue,
-        name: "评测评分（锚点版）",
+        name: "评测评分（锚点版·\(variant.displayName)）",
         system_prompt: "你是严谨的中文写作评审，只输出用户要求的 JSON。",
         user_template: """
         请为下面这篇文章评分并列出问题。先找证据，再定分数；不同质量的稿件分数必须拉开，不要都给 70 分档的"安全分"。
@@ -95,13 +142,113 @@ package struct EvalPipelineFacade {
            - 0–59：需重写。跑题、明显截断、大量套话或腔调失控
         3. 分数必须与问题清单一致：有高危问题不得进入 80 档；没有任何问题不应停留在 70 档
 
-        请只输出 JSON，不要输出 Markdown 代码块：
-        {"summary":"一句话评价","overall_score":83,"strengths":["优点"],"issues":[{"dimension":"维度","severity":"高/中/低","excerpt":"原文片段","problem":"问题","suggestion":"建议"}],"revision_plan":["第一步怎么改"],"training_focus":[],"style_notes":[],"resolved_from_last":[]}
+        \(variant.outputNote)
+        {"summary":"一句话评价","overall_score":\(variant.scoreExample),"strengths":["优点"],"issues":[{"dimension":"维度","severity":"高/中/低","excerpt":"原文片段","problem":"问题","suggestion":"建议"}],"revision_plan":["第一步怎么改"],"training_focus":[],"style_notes":[],"resolved_from_last":[]}
         """,
         is_default: nil,
         updated_at: nil,
         created_at: nil
-    )
+        )
+    }
+
+    /// 重判产出的单条问题（24.14）。主评测路径只留三个计数与 `维度(严重度)`，回答不了
+    /// "哪一句把这篇按在了 75 分"——重判路径把原文片段与判词一起留下。
+    package struct RejudgedIssue: Codable, Hashable, Sendable {
+        package var dimension: String
+        package var severity: String
+        package var excerpt: String
+        package var problem: String
+
+        package init(dimension: String, severity: String, excerpt: String, problem: String) {
+            self.dimension = dimension
+            self.severity = severity
+            self.excerpt = excerpt
+            self.problem = problem
+        }
+    }
+
+    package struct RejudgeOutcome: Sendable {
+        package var overallScore: Int?
+        package var issues: [RejudgedIssue]
+        package var elapsedMS: Int
+        package var success: Bool
+        package var error: String
+
+        package var highIssueCount: Int { issues.filter { $0.severity == "高" }.count }
+        package var mediumIssueCount: Int { issues.filter { $0.severity == "中" }.count }
+        package var lowIssueCount: Int { issues.filter { $0.severity == "低" }.count }
+    }
+
+    /// 只跑评分那一次调用，不重新生成正文（24.14）。
+    ///
+    /// 这是整套对照实验成本低的原因：`eval_results.raw_json.content` 已经存了每一格的完整成稿，
+    /// 换评分变量时正文是**同一个字节序列**，属于配对设计——组间方差被消掉，检出同样大小的差异
+    /// 所需样本量远小于两次独立全量重跑，而且省掉了生成侧全部调用（一轮 112 格约 8 小时）。
+    package func rejudge(
+        evalCase: EvalCaseInput,
+        title: String,
+        content: String,
+        variant: ScoringVariant
+    ) async -> RejudgeOutcome {
+        let style = resolvedStyle(forDirection: evalCase.direction)
+        let context = makeContext(
+            stage: "评测：重判评分（\(variant.rawValue)）",
+            evalCase: evalCase,
+            style: style,
+            title: title,
+            content: content
+        )
+        let descriptor = NativeWorkflowCatalog.writingReview(
+            context: context,
+            style: style,
+            previousReview: nil,
+            template: Self.scoringTemplate(variant: variant)
+        )
+        var run = await executor.execute(descriptor, config: config, apiKey: apiKey)
+        var elapsed = run.elapsedMS
+        // 与主路径同一条重试规则：非 JSON 会被宽松解码吞成"成功但无分数"，补一次重评。
+        if run.success, run.result.overall_score == nil {
+            let retry = await executor.execute(descriptor, config: config, apiKey: apiKey)
+            elapsed += retry.elapsedMS
+            run = retry
+        }
+        guard run.success else {
+            return RejudgeOutcome(
+                overallScore: nil,
+                issues: [],
+                elapsedMS: elapsed,
+                success: false,
+                error: run.error.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        let issues = (run.result.issues ?? []).map { issue in
+            RejudgedIssue(
+                dimension: issue.dimension.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "未标维度" : issue.dimension.trimmingCharacters(in: .whitespacesAndNewlines),
+                severity: issue.severity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "未标" : issue.severity.trimmingCharacters(in: .whitespacesAndNewlines),
+                excerpt: (issue.excerpt ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                problem: issue.problem.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return RejudgeOutcome(
+            overallScore: run.result.overall_score,
+            issues: issues,
+            elapsedMS: elapsed,
+            success: true,
+            error: run.result.overall_score == nil ? "重试后仍未返回结构化分数" : ""
+        )
+    }
+
+    /// 与 `run(pipeline:evalCase:)` 用同一条风格解析规则，保证重判看到的风格配置与原轮一致。
+    private func resolvedStyle(forDirection direction: String) -> StyleProfile {
+        var style = (try? database.styleProfile(forDirection: direction))
+            ?? StyleProfile(id: -1, name: "默认风格", is_default: 1)
+        if !styleSamples.isEmpty {
+            style.sample_texts = styleSamples + (style.sample_texts ?? [])
+        }
+        return style
+    }
 
     /// agentic 会话轨迹的单行压缩（评测仪器修缮），纯函数便于测试。
     package static func agentSessionSummary(stepNames: [String], stopReason: String) -> String {

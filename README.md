@@ -93,6 +93,28 @@ swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --resume
 
 失败的样本（超时、连接中断等）不再打分：报告头会点名「无效样本」，它们不计入差值，也不进放行门。
 
+### 配对重判：验证一次评分侧改动（PRD 24.14）
+
+`--rejudge` 拿**存量正文**只重跑评分，不重新生成。两个评分变量（改动前的写死示例值 / 改动后的占位符）
+读的是同一个字节序列，因此是配对对照——组间方差被消掉，检出同样大小的差异所需样本量远小于两次独立全量重跑。
+
+```bash
+# 先试跑一条管线（50 格，约 40 分钟）
+caffeinate -i swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --rejudge latest --pipelines direct
+
+# 全量（200 格 = 100 格正文 × 2 个变量）
+caffeinate -i swift run --package-path macos/CreativeWorkshopMac CreativeWorkshopEval --rejudge latest
+```
+
+来源默认取最近一轮，也可以传具体 run_id。`--resume` 可续跑。报告写入 `evals/reports/rejudge-*.md`，含：
+
+- **配对差值**与 95% 置信区间——区间跨 0 就是"判不出"，不是"没效果"；
+- **83 分占比**在两臂各占多少格（这次改动最直接的观察点）；
+- **完整问题维度表**（维度 / 高中低 / 覆盖格数），按高危数排序——主评测路径只存三个计数，查不到维度；
+- 高危问题的**原文片段与判词**，用来回答"哪一句把这篇按在了 75 分"。
+
+结果落 `evals/eval_results.sqlite3` 的 `rejudge_results` 表，与基线表 `eval_results` 分开，不污染跨轮基线。
+
 ## 清理说明
 
 旧 Web / FastAPI 路径已经移出工作区，包括：
