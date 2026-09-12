@@ -13,10 +13,19 @@ struct TopicsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+
+                seriesMenu
             }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: WorkshopMetrics.stackSpacing) {
+                    // 系列排在平铺列表之前：「下一篇写谁」在有限清单里是查表，不该淹在
+                    // 一百多条储备里让人重新挑一遍。
+                    if !store.seriesProgress.isEmpty {
+                        seriesSection
+                        Divider()
+                    }
+
                     if store.topics.isEmpty {
                         emptyState
                     } else {
@@ -32,6 +41,105 @@ struct TopicsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// 哪些标签算系列由作者勾选：标签里大部分是「书评」「AI 工具」这种普通分类，
+    /// 机器分不出哪个是系列。列出已有标签让他点，而不是手敲——手敲会敲出
+    /// 「红楼梦 」这种带空格的孪生标签。
+    private var seriesMenu: some View {
+        Menu {
+            if store.seriesCandidateTags.isEmpty {
+                Text("还没有任何标签")
+            } else {
+                ForEach(store.seriesCandidateTags, id: \.self) { tag in
+                    Button {
+                        store.toggleSeriesTag(tag)
+                    } label: {
+                        if isSeries(tag) {
+                            Label(tag, systemImage: "checkmark")
+                        } else {
+                            Text(tag)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("系列", systemImage: "square.stack.3d.up")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private func isSeries(_ tag: String) -> Bool {
+        store.seriesTags.contains {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+
+    private var seriesSection: some View {
+        VStack(alignment: .leading, spacing: WorkshopMetrics.controlSpacing) {
+            ForEach(store.seriesProgress) { series in
+                seriesCard(series)
+            }
+        }
+    }
+
+    private func seriesCard(_ series: SeriesProgress.Series) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(series.tag)
+                    .font(.headline)
+                Text("已写 \(series.written.count) / 共 \(series.total)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if series.pending.isEmpty, series.total > 0 {
+                    Text("这个系列写完了")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if series.total > 0 {
+                ProgressView(value: series.completion)
+                    .progressViewStyle(.linear)
+            }
+
+            if !series.written.isEmpty {
+                Text("已写：" + series.written.compactMap(\.title).joined(separator: "、"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            // 待写的直接可点开写——「下一篇写谁」的答案就该一步之内可执行。
+            if !series.pending.isEmpty {
+                Text("还剩 \(series.pending.count) 篇")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(series.pending) { topic in
+                    HStack {
+                        Text(topic.title)
+                            .font(.callout)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("开始写") {
+                            store.useTopic(topic)
+                            selection = .process
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            } else if series.total == 0 {
+                Text("还没有文章或选题带这个标签。给它们打上「\(series.tag)」标签，这里就会显示进度。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(WorkshopPalette.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var emptyState: some View {

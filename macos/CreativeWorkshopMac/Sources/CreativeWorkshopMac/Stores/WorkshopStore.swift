@@ -83,6 +83,8 @@ final class WorkshopStore: ObservableObject {
     @Published var agentRuns: [AgentRun] = []
     /// 23.5 半自动调度："按计划执行"正在进行时的逐步进度；nil 表示当前没有计划在执行。
     @Published var advisorPlanProgress: AdvisorPlanProgress?
+    /// 作者指定为「系列」的标签（顺序即他排的顺序），用来在选题页算系列进度。
+    @Published var seriesTags: [String] = []
     /// 23.6.6 实验室开关：默认关闭，入口在关闭时直接拒绝（UI 在任务 15）。
     @Published var agentLabEnabled: Bool = false
     @Published var agentCallBudget: Int = 12
@@ -219,6 +221,7 @@ final class WorkshopStore: ObservableObject {
         self.runtimeStatus = database.runtimeStatus(model: config.model)
         self.agentLabEnabled = (try? database.agentLabEnabled()) ?? false
         self.agentCallBudget = (try? database.agentCallBudget()) ?? 12
+        self.seriesTags = (try? database.seriesTags()) ?? []
     }
 
     var selectedArticle: Article? {
@@ -373,6 +376,30 @@ final class WorkshopStore: ObservableObject {
     func setAgentLabEnabled(_ enabled: Bool) {
         agentLabEnabled = enabled
         try? database.saveAgentLabEnabled(enabled)
+    }
+
+    /// 当前的系列进度，按作者排的顺序。计算在 Core 的 `SeriesProgress` 里，这里只投影。
+    var seriesProgress: [SeriesProgress.Series] {
+        SeriesProgress.build(seriesTags: seriesTags, articles: articles, topics: topics)
+    }
+
+    /// 可供勾选为系列的候选标签：文章与选题里出现过的全部标签，多的在前。
+    var seriesCandidateTags: [String] {
+        SeriesProgress.candidateTags(articles: articles, topics: topics)
+    }
+
+    /// 勾选/取消一个系列标签。与实验室开关同样是即时生效的本地设置，不走 run()。
+    func toggleSeriesTag(_ tag: String) {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let index = seriesTags.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trimmed.lowercased()
+        }) {
+            seriesTags.remove(at: index)
+        } else {
+            seriesTags.append(trimmed)
+        }
+        try? database.saveSeriesTags(seriesTags)
     }
 
     func clearAPIKey() async {
