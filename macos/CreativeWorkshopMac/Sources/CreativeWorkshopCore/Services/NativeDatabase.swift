@@ -128,6 +128,17 @@ package final class NativeDatabase {
         try saveSetting(key: "agent_lab_enabled", value: enabled ? "1" : "0")
     }
 
+    /// 作者指定为「系列」的标签，顺序即他自己排的顺序。
+    /// 存成 JSON 数组而不是逗号分隔：标签本身可能含逗号。
+    package func seriesTags() throws -> [String] {
+        guard let raw = try setting("series_tags"), !raw.isEmpty else { return [] }
+        return decodeStringArray(raw)
+    }
+
+    package func saveSeriesTags(_ tags: [String]) throws {
+        try saveSetting(key: "series_tags", value: encodeStringArray(tags))
+    }
+
     package func listArticles(status: String? = nil) throws -> [Article] {
         let trimmedStatus = status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmedStatus.isEmpty || trimmedStatus == "全部" {
