@@ -152,9 +152,23 @@ struct MaterialsView: View {
                     }
                     .disabled(store.selectedIdea == nil)
 
-                    Button {
-                        if let idea = store.selectedIdea {
-                            Task { await store.generateTopicsFromIdea(idea) }
+                    // 方向在这里选，而不是沿用创作页那一个：素材箱攒的东西和手上正在写的
+                    // 那篇常常不是一个方向，沉默继承会生成一批方向错的选题。
+                    Menu {
+                        if !store.normalizedDirection.isEmpty {
+                            Button("沿用当前方向（\(store.normalizedDirection)）") {
+                                if let idea = store.selectedIdea {
+                                    Task { await store.generateTopicsFromIdea(idea) }
+                                }
+                            }
+                            Divider()
+                        }
+                        ForEach(store.knownDirections, id: \.self) { direction in
+                            Button(direction) {
+                                if let idea = store.selectedIdea {
+                                    Task { await store.generateTopicsFromIdea(idea, direction: direction) }
+                                }
+                            }
                         }
                     } label: {
                         Label("从素材生成选题", systemImage: "sparkles")
