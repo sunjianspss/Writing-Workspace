@@ -17,3 +17,12 @@ macos/CreativeWorkshopMac/.build/
 logs/
 .codex/
 evals/eval_results.sqlite3
+
+# 仓库根目录下的公众号文章成品与配图：本机私有写作产物，不是工坊代码
+# （只锚定根目录，macos/ 下的 index.html 等资源不受影响）
+/*.docx
+/*.html
+/*.png
+/*.jpg
+/*.jpeg
+/*.pdf
