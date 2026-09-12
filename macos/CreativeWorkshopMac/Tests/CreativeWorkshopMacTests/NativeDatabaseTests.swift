@@ -271,6 +271,72 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertEqual(try database.defaultStyle().id, saved.id)
     }
 
+    /// 按写作方向取风格档案：精确 → 同族 → 默认。
+    ///
+    /// 同族这一档是新加的。此前只有"精确相等或回退默认"，而 `articles.genre` 存的是写作
+    /// 方向原文、本来就碎成六值（24.6）：作者建了「技术分享」档案，写「科研技术」时照样
+    /// 落回情感文学腔的默认档。样本抽取早就按同族走，档案匹配却卡在精确相等——同一次生成
+    /// 里两把尺子对不上。
+    func testStyleProfileFallsBackThroughGenreFamilyBeforeDefault() throws {
+        let database = try makeDatabase()
+        let tech = try database.saveStyleProfile(
+            id: nil,
+            profile: genreProfile(name: "技术分享风格", genre: "技术分享", focus: "看结论是否可复现")
+        )
+
+        XCTAssertEqual(
+            try database.styleProfile(forDirection: "技术分享").id, tech.id,
+            "精确相同必须命中"
+        )
+        XCTAssertEqual(
+            try database.styleProfile(forDirection: "科研技术").id, tech.id,
+            "「科研技术」与「技术分享」靠「技术」同族，应命中而不是回退默认"
+        )
+        XCTAssertEqual(
+            try database.styleProfile(forDirection: "情感文学").name, "默认公众号风格",
+            "不同族必须回退默认，不能乱认亲"
+        )
+        XCTAssertEqual(
+            try database.styleProfile(forDirection: "").name, "默认公众号风格",
+            "空方向回退默认"
+        )
+    }
+
+    /// 同族回退不能越过精确匹配：两个档案都在时，精确的那个赢。
+    func testExactGenreWinsOverFamilyMatch() throws {
+        let database = try makeDatabase()
+        _ = try database.saveStyleProfile(
+            id: nil,
+            profile: genreProfile(name: "技术分享风格", genre: "技术分享", focus: "可复现")
+        )
+        let research = try database.saveStyleProfile(
+            id: nil,
+            profile: genreProfile(name: "科研技术风格", genre: "科研技术", focus: "看证据链")
+        )
+
+        XCTAssertEqual(try database.styleProfile(forDirection: "科研技术").id, research.id)
+    }
+
+    private func genreProfile(name: String, genre: String, focus: String) -> StyleProfile {
+        StyleProfile(
+            id: 0,
+            name: name,
+            language_style: "中文",
+            tone: "克制",
+            structure_preference: "先结论后过程",
+            favorite_expressions: "",
+            forbidden_expressions: "不要培训腔",
+            sample_texts: [],
+            title_style_like: "自然",
+            title_style_dislike: "夸张",
+            is_default: 0,
+            genre: genre,
+            genre_focus: focus,
+            known_pitfalls: [],
+            learned_preferences: []
+        )
+    }
+
     func testSaveUpdateUseAndDeleteIdeas() throws {
         let database = try makeDatabase()
 

@@ -307,6 +307,17 @@ package final class NativeDatabase {
         ).first {
             return matched
         }
+        // 精确落空后按同族再找一次，用的是 `StyleSampleSelector` 已有的那条规则（共享 ≥2 个
+        // 连续汉字）。此前这里只有精确相等，于是作者得为「技术分享」和「科研技术」各建一个
+        // 档案才都能生效——而 `articles.genre` 存的是写作方向原文，本来就碎成六值（24.6）。
+        // 样本抽取早就按同族走了，档案匹配却还卡在精确相等：同一次生成里，样本认同族、
+        // 体裁评价重点不认，两把尺子对不上。
+        if let family = try rows(
+            "\(styleSelectSQL) WHERE genre IS NOT NULL AND genre <> '' ORDER BY updated_at DESC",
+            mapper: style
+        ).first(where: { StyleSampleSelector.isSameGenreFamily($0.genre, trimmed) }) {
+            return family
+        }
         return try defaultStyle()
     }
 
