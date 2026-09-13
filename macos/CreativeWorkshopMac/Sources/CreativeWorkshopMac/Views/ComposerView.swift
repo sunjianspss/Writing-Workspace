@@ -632,16 +632,29 @@ struct ComposerView: View {
         }
     }
 
+    /// 「正文」页：内容放得下时填满可视区，放不下时滚动——而不是把页头顶出屏幕。
+    ///
+    /// 此前这里是个不滚动的 VStack（「创作过程」「发布物料」都有 ScrollView，唯独它没有）。
+    /// 正文编辑器的 `minHeight: 320` 加上标题、摘要、流程指示条和发布控件，在窗口最小尺寸
+    /// （980×732）下就超出可用高度；超出的 VStack 不会裁剪，而是整体上溢——于是左列的
+    /// 「新建文章」、右列的整条页头连同六个按钮全被顶到窗口上沿之外，红绿灯压在侧栏文字上。
+    ///
+    /// `minHeight: proxy.size.height` 是这两种行为的接缝：够高时内容被撑满（编辑器照常
+    /// 吃掉剩余空间），不够高时超出部分进入滚动。
     private var articleEditorSection: some View {
-        Group {
-            if isFocusWritingMode {
-                focusArticleEditorSection
-            } else {
-                standardArticleEditorSection
+        GeometryReader { proxy in
+            ScrollView {
+                Group {
+                    if isFocusWritingMode {
+                        focusArticleEditorSection
+                    } else {
+                        standardArticleEditorSection
+                    }
+                }
+                .padding(.bottom, 14)
+                .frame(minHeight: proxy.size.height, alignment: .topLeading)
             }
         }
-        .padding(.bottom, 14)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
         .layoutPriority(1)
     }
 
