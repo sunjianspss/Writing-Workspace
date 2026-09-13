@@ -1592,6 +1592,16 @@ package final class NativeDatabase {
                 version: 13,
                 name: "回填历史诊断的兜底标记",
                 apply: {
+                    // **迁移必须自包含**：`ensureColumns()` 只在 `initialVersion <= 10` 时执行，
+                    // 从 v11 起的库根本不会经过它。第一版这里直接 UPDATE 新列，v12 的库上
+                    // 当场炸（no such column: used_fallback），靠自动恢复才没丢数据。
+                    // 所以列在这里自己补，`ensureColumn` 是幂等的，新库走建表路径时是空操作。
+                    try self.ensureColumn(
+                        table: "writing_reviews",
+                        name: "used_fallback",
+                        definition: "INTEGER NOT NULL DEFAULT 0"
+                    )
+
                     // `used_fallback` 从现在起在写入时落下，但历史行全是 0。唯一能识别它们的
                     // 线索是 `NativeFallbacks` 每次都会追加到 style_notes 的那句固定文案。
                     //

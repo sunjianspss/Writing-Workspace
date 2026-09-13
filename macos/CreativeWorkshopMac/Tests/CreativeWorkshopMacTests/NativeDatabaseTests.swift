@@ -1238,6 +1238,42 @@ final class NativeDatabaseTests: XCTestCase {
         XCTAssertEqual(reviews.first(where: { $0.id == real.id })?.used_fallback, false, "真诊断不得被误标")
     }
 
+    /// **从 v12 起步**的迁移必须能跑通。
+    ///
+    /// 这条是补上的盲区：所有迁移测试此前都从 v10 起步，而 v10 会经过 `ensureColumns()`
+    /// 的补列兼容步骤——于是 v13 即使自己不建列也能过。真实的 v12 库不走那一步，v13 第一版
+    /// 直接 UPDATE 新列，在作者机器上当场崩了（no such column: used_fallback）。
+    /// 从 v11 起每个跃迁都必须自包含，这条测试守住它。
+    func testMigrationFromVersion12DoesNotRelyOnLegacyColumnCompatibility() throws {
+        let (databaseURL, _) = try makeVersion10Database(articleTitle: "稿")
+
+        // 先正常升到最新，再把版本号退回 12、并丢掉 v13 的成果，
+        // 模拟一个"只走过 v12"的真实库。
+        var seeding: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
+        _ = try XCTUnwrap(seeding).saveWritingReview(
+            result: reviewResult(styleNotes: ["当前诊断来自本地规则，只做保底参考；配置 API Key 后会得到更细的编辑反馈。"]),
+            articleID: nil, titleSnapshot: "稿", model: "deepseek-v4-pro",
+            reviewedSnapshot: "正文", usedFallback: false
+        )
+        seeding = nil
+        try executeRawSQL(
+            """
+            ALTER TABLE writing_reviews DROP COLUMN used_fallback;
+            DELETE FROM schema_migrations WHERE version >= 13;
+            PRAGMA user_version = 12;
+            """,
+            at: databaseURL
+        )
+
+        let migrated = try NativeDatabase(databaseURL: databaseURL)
+
+        XCTAssertEqual(try migrated.schemaVersion(), 13, "v12 → v13 必须能跑通")
+        XCTAssertEqual(
+            try migrated.listWritingReviews(limit: 5).first?.used_fallback, true,
+            "列由迁移自己补上，回填照常生效"
+        )
+    }
+
     /// 新写入的诊断在落库那一刻就带上标记，不依赖事后从文案里猜。
     func testNewReviewRecordsFallbackFlagAtWriteTime() throws {
         let database = try makeDatabase()
