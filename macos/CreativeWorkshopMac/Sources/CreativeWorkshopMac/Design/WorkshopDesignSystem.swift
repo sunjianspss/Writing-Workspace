@@ -194,13 +194,18 @@ struct WorkshopScreenHeader<Actions: View>: View {
             }
             .font(.callout)
             .lineLimit(1)
+            // 窄窗口下先牺牲面包屑，不牺牲动作：动作点不到就没法工作，面包屑截断只是少看
+            // 几个字。没有这两行时二者平摊压缩，结果是动作被挤出可视区。
+            .truncationMode(.tail)
+            .layoutPriority(0)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(group)，\(title)")
 
-            Spacer(minLength: WorkshopMetrics.stackSpacing)
+            Spacer(minLength: WorkshopMetrics.fieldSpacing)
 
             actions()
                 .controlSize(.small)
+                .layoutPriority(1)
         }
         .padding(.horizontal, WorkshopMetrics.pagePadding)
         .padding(.vertical, WorkshopMetrics.stackSpacing)

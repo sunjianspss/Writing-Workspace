@@ -34,6 +34,10 @@ struct CreativeWorkshopMacApp: App {
                     }
                 }
         }
+        // 让窗口真的尊重上面那个 minWidth/minHeight。默认的 .automatic 只把它当建议，
+        // 拖拽过程中仍可能把内容压到最小尺寸以下——那时 HStack 不会裁剪，只会互相重叠，
+        // 于是标题栏、红绿灯和正文叠在一起、顶部按钮整排消失。
+        .windowResizability(.contentMinSize)
         .commands {
             // 设置不再是独立窗口，⌘, 改为选中左列底部那个目的地。
             CommandGroup(replacing: .appSettings) {

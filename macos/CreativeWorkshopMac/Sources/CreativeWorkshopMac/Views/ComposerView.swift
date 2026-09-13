@@ -484,11 +484,40 @@ struct ComposerView: View {
         }
     }
 
+    /// 顶部动作栏的三档降级：完整文案 → 纯图标 → 收进一个菜单。
+    ///
+    /// 第三档是新加的。`ViewThatFits` 在所有候选都放不下时会**硬用最后一个**，于是窄窗口下
+    /// 纯图标那档继续往外溢，按钮被挤出可视区、点不到。兜底必须是一个宽度恒定、永远放得下
+    /// 的东西——一个菜单。
     private var topActionBar: some View {
         ViewThatFits(in: .horizontal) {
             topActionsFull
             topActionsCompact
+            topActionsMenu
         }
+    }
+
+    private var topActionsMenu: some View {
+        Menu {
+            Button("智能下一步") { Task { await store.runWritingAdvisor() } }
+                .disabled(!store.canRunAdvisor)
+            Button("写作诊断") { Task { await store.reviewCurrentDraft() } }
+                .disabled(!store.canRunWritingCoach)
+            if store.agentLabEnabled {
+                Button("代理会话") { Task { await store.startAgentSession() } }
+                    .disabled(!store.canStartAgentSession)
+            }
+            Divider()
+            Button("保存") { Task { await store.saveArticle() } }
+                .disabled(store.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isLoading)
+            Button("新稿") { store.newDraft() }
+            Button("刷新") { Task { await store.refreshAll() } }
+        } label: {
+            Label("操作", systemImage: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .fixedSize()
     }
 
     private var topActionsFull: some View {
