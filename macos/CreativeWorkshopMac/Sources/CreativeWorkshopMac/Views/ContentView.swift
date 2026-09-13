@@ -23,8 +23,21 @@ struct ContentView: View {
                 )
         } detail: {
             VStack(spacing: 0) {
-                detailContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // 右列的宽度在这里钉死。
+                //
+                // SwiftUI 的 HStack/HSplitView 在内容超出可用宽度时**不裁剪**，而是整体
+                // 溢出并居中——于是内容会盖到左列上、也会被窗口右边缘切掉。素材箱就是
+                // 这样：分栏要 1041pt，窗口只有 980，两边各切掉约 30pt，侧栏的分组标题
+                // 和右侧的按钮同时消失。
+                //
+                // `width: proxy.size.width` 把"可用宽度"变成硬约束：超出的部分在右列
+                // 内部解决（压缩或裁剪），不再向外挤。这与「正文」页那条纵向接缝是同一
+                // 类问题的两个方向。
+                GeometryReader { proxy in
+                    detailContent
+                        .frame(width: proxy.size.width, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 WorkshopOperationStatusBar(
                     text: store.statusText,

@@ -18,7 +18,11 @@ struct CreativeWorkshopMacApp: App {
     var body: some Scene {
         WindowGroup("创作工坊") {
             ContentView(store: store, navigator: navigator, profile: profile)
-                .frame(minWidth: 980, minHeight: 680)
+                // 下限从 980 提到 1060：980 是个不实的数字。实测右列在最窄的那一屏
+                // （素材箱：列表 + 编辑器双栏）要 1041pt，加上左列 232 就已经越界，
+                // 于是内容溢出窗口、左右两侧一起被切。与其把每个按钮都改成会缩的，
+                // 不如让下限说实话——1060 在 1512 宽的屏幕上仍然宽裕。
+                .frame(minWidth: 1060, minHeight: 680)
                 // 24.14：外观是作者的选择，不是硬编码。`WorkshopPalette` 的每个 token
                 // 都随外观解析，所以三种设置都成立。
                 .preferredColorScheme(preferredAppearance.colorScheme)
