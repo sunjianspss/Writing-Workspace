@@ -434,7 +434,12 @@ final class WorkshopStoreTests: XCTestCase {
         XCTAssertEqual(try database.listArticles().first?.audit_report?.quote_issues?.first?.excerpt, "这是一句需要核对的引文")
     }
 
-    func testSavingNewPublishedArticleRunsAuditAndPublishingMetrics() async throws {
+    /// 发表这一步产生完整数据链：终审报告 + 编辑量记录（北极星）+ 首发时间。
+    ///
+    /// 此前这条覆盖挂在「保存」上——把 `articleStatus` 设成已发布再保存就算发表了。那正是
+    /// 作者踩到的陷阱（选了已发布、点保存、库里还是已归档），现在保存不再改状态，这条链
+    /// 只由发布流程产生。覆盖的东西没变，触发它的入口换成了正确的那个。
+    func testPublishingRunsAuditAndPublishingMetrics() async throws {
         let database = try makeDatabase()
         let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
         let version = try database.saveDraftVersion(
@@ -448,15 +453,25 @@ final class WorkshopStoreTests: XCTestCase {
         )
         store.title = "新发布文章"
         store.content = "AI 确认稿，发布前补了一句。"
-        store.articleStatus = "已发布"
 
         await store.saveArticle()
 
-        let article = try XCTUnwrap(database.listArticles().first)
-        XCTAssertEqual(article.status, "已发布")
-        XCTAssertNotNil(article.audit_report)
+        let saved = try XCTUnwrap(database.listArticles().first)
+        XCTAssertEqual(saved.status, Article.draftStatus, "保存只产出草稿，不代替发表")
+        XCTAssertNil(saved.audit_report, "保存不跑终审")
+        XCTAssertTrue(try database.listEditRecords(limit: 10).isEmpty, "保存不记编辑量")
+
+        store.selectedArticleID = saved.id
+        XCTAssertEqual(store.publishStep, .publish, "存好之后，下一步就是发表")
+
+        await store.advancePublishFlow()
+
+        let published = try XCTUnwrap(database.listArticles().first { $0.id == saved.id })
+        XCTAssertEqual(published.status, Article.publishedStatus)
+        XCTAssertNotNil(published.published_at, "发表要写下首发时间")
+        XCTAssertNotNil(published.audit_report)
         XCTAssertEqual(try database.listEditRecords(limit: 10).first?.draft_version_id, version.id)
-        XCTAssertEqual(store.latestPrePublishAudit?.article_id, article.id)
+        XCTAssertEqual(store.latestPrePublishAudit?.article_id, published.id)
         XCTAssertEqual(store.editRecordStats?.total, 1)
     }
 

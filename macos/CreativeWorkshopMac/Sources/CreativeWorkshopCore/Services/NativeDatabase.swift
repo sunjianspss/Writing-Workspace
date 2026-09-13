@@ -452,11 +452,33 @@ package final class NativeDatabase {
         return try getArticle(Int(sqlite3_last_insert_rowid(db)))
     }
 
+    /// 翻「已发布」时补记 `published_at`。
+    ///
+    /// 这一列建表时就有，但**全仓没有任何代码写过它**——17 篇文章全是空。于是"这篇到底
+    /// 有没有真的走过发表"无从判断，而这正是北极星（发布时编辑比例）只在这一次跃迁上记录
+    /// 的那一步（24.8）。补上之后，"已归档但 published_at 为空"就能识别出跳过了发表的稿子。
+    ///
+    /// 已有值不覆盖：再次点已发布不该把首发日期改成今天。
     package func updateArticleStatus(id: Int, status: String) throws -> Article {
-        try execute(
-            "UPDATE articles SET status = ?, updated_at = ? WHERE id = ?",
-            [status, utcNow(), id]
-        )
+        if status == Article.publishedStatus {
+            try execute(
+                """
+                UPDATE articles
+                SET status = ?, updated_at = ?,
+                    published_at = CASE
+                        WHEN published_at IS NULL OR published_at = '' THEN ?
+                        ELSE published_at
+                    END
+                WHERE id = ?
+                """,
+                [status, utcNow(), utcNow(), id]
+            )
+        } else {
+            try execute(
+                "UPDATE articles SET status = ?, updated_at = ? WHERE id = ?",
+                [status, utcNow(), id]
+            )
+        }
         return try getArticle(id)
     }
 
@@ -1778,6 +1800,7 @@ package final class NativeDatabase {
             updated_at: text(statement, 9),
             created_at: text(statement, 8),
             related_topic_id: optionalInt(statement, 7),
+            published_at: text(statement, 12),
             genre: text(statement, 10),
             audit_report: decodeJSON(text(statement, 11), fallback: nil as PrePublishAuditReport?)
         )
@@ -2210,7 +2233,7 @@ FROM topics
 """
 
 private let articleSelectSQL = """
-SELECT id, title, content, summary, status, type, tags, related_topic_id, created_at, updated_at, genre, audit_report
+SELECT id, title, content, summary, status, type, tags, related_topic_id, created_at, updated_at, genre, audit_report, published_at
 FROM articles
 """
 

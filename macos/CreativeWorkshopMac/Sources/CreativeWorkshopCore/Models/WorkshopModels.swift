@@ -502,6 +502,12 @@ package enum PolishMode: String, CaseIterable, Identifiable, Hashable {
 }
 
 package struct Article: Codable, Identifiable, Hashable {
+    /// 发布流程的四个状态（24.1：草稿 → 待复核 → 已发布 → 已归档 是有方向的路径）。
+    /// 「待复核」不落在 articles.status 上——它由是否存在 pending 版本决定。
+    package static let draftStatus = "草稿"
+    package static let publishedStatus = "已发布"
+    package static let archivedStatus = "已归档"
+
     package let id: Int
     package var title: String?
     package var content: String?
@@ -512,6 +518,9 @@ package struct Article: Codable, Identifiable, Hashable {
     package var updated_at: String?
     package var created_at: String?
     package var related_topic_id: Int?
+    /// 首次翻「已发布」的时间。这一列建表时就有，但直到现在既没人写、也没人读——
+    /// 于是"这篇有没有真的走过发表"无从判断。空值意味着它从未经过发表这一站。
+    package var published_at: String?
     /// 保存时写入的写作方向/体裁标签，用于体裁化 few-shot 样本匹配（18.3.4）。
     package var genre: String?
     /// 最近一次发表前终审报告快照（20.5 / 20.7）。

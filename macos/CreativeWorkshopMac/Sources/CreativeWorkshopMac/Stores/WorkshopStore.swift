@@ -1008,8 +1008,19 @@ final class WorkshopStore: ObservableObject {
             return
         }
 
-        let finalStatus = articleStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "草稿" : articleStatus
-        await run(finalStatus == "已发布" ? "保存并发表前终审" : "保存文章", cancellable: finalStatus == "已发布") {
+        // 保存只负责保存：状态一律沿用库里已有的，新文章一律是草稿。
+        //
+        // 此前这里读的是 `articleStatus`——一个同时被状态选择器写、被刷新覆盖、又被保存
+        // 写回库的可变量。于是"在选择器里选了已发布、点保存、结果库里还是已归档"；反过来
+        // 新建文章时它还可能带着上一篇的残留状态，把新草稿直接存成已归档。
+        // 状态变更现在只有 `updateSelectedArticleStatus` 一个入口，那条路才会跑终审、记
+        // 编辑量、写 published_at。
+        let persistedStatus = selectedArticleID
+            .flatMap { try? database.getArticle($0) }?
+            .status?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalStatus = (persistedStatus?.isEmpty == false) ? persistedStatus! : Article.draftStatus
+        await run("保存文章") {
             let previousSaved = self.selectedArticleID.flatMap { try? self.database.getArticle($0) }
             let outcome = try self.writingWorkflow.execute(.saveArticle(.init(
                 articleID: self.selectedArticleID,
@@ -1021,15 +1032,12 @@ final class WorkshopStore: ObservableObject {
                 return
             }
             self.writingSession.didSaveArticle(article)
-            var auditNote = ""
-            // 编辑量只在「非已发布 → 已发布」这一次跃迁上记；已发布状态下再保存不再追加，
-            // 否则同一篇文章会被重复计数（24.8：香菱一次发布记出 7 条零改动）。
-            if finalStatus == "已发布" {
-                auditNote = try await self.runPrePublishAudit(articleID: article.id)
-                if previousSaved?.status != "已发布" {
-                    self.applyPublishingMetrics(PublishingMetricsRecorder(database: self.database).recordPublishedArticle(article))
-                }
-            }
+            // 终审与编辑量记录都留在发布这一步（`updateSelectedArticleStatus`），保存不碰。
+            //
+            // 此前保存也会跑终审：因为保存能顺手把状态改成已发布，就得在这里补上数据链。
+            // 现在保存不再改状态，这段既不可达（finalStatus 恒等于库里已有的状态），也不该
+            // 存在——一个叫「保存」的按钮不该悄悄花掉一次模型调用。要重跑终审走「发表前
+            // 审核」那一屏。
             self.articleStatus = article.status ?? finalStatus
             self.articles = try self.database.listArticles()
             if markedTopic != nil {
@@ -1038,7 +1046,7 @@ final class WorkshopStore: ObservableObject {
             self.draftVersions = try self.database.listDraftVersions(articleID: article.id, limit: 8)
             self.stats = try self.database.overviewStats()
             self.applyPublishingMetrics(try? PublishingMetricsRecorder(database: self.database).snapshot())
-            self.statusText = auditNote.isEmpty ? "文章已保存" : "文章已保存；\(auditNote)"
+            self.statusText = "文章已保存"
         }
     }
 

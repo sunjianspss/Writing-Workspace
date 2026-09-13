@@ -10,7 +10,6 @@ struct ComposerView: View {
     @Binding var selection: WorkspaceDestination
     @SceneStorage("isFocusWritingMode") private var isFocusWritingMode = false
     @State private var isWeChatFormatterPresented = false
-    private let articleStatuses = ["草稿", "已发布", "已归档"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -599,27 +598,37 @@ struct ComposerView: View {
     }
 
     /// 24.1 发布流程指示条：让"已发布"作为数据链必经站自解释。
+    ///
+    /// 字号从 caption2 提到 caption，并给走过的站点打勾：这是这一段唯一回答"我现在在哪"
+    /// 的东西，原先 11pt 摆在本节最底下，等于没有。
     private var publishFlowIndicator: some View {
         HStack(spacing: 4) {
             ForEach(Array(WorkshopStore.publishFlowStages.enumerated()), id: \.offset) { index, stage in
                 if index > 0 {
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 8))
+                        .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
                 }
-                Text(stage)
-                    .font(.caption2)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        index == store.publishFlowStageIndex ? Color.accentColor.opacity(0.18) : Color.clear,
-                        in: Capsule()
-                    )
-                    .foregroundStyle(index == store.publishFlowStageIndex ? Color.accentColor : .secondary)
+                HStack(spacing: 3) {
+                    if index < store.publishFlowStageIndex {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    Text(stage)
+                }
+                .font(index == store.publishFlowStageIndex ? .caption.weight(.semibold) : .caption)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    index == store.publishFlowStageIndex ? Color.accentColor.opacity(0.18) : Color.clear,
+                    in: Capsule()
+                )
+                .foregroundStyle(
+                    index == store.publishFlowStageIndex
+                        ? Color.accentColor
+                        : (index < store.publishFlowStageIndex ? Color.secondary : Color.secondary.opacity(0.55))
+                )
             }
-            Text("发布时记录终审与编辑量")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -697,20 +706,11 @@ struct ComposerView: View {
 
                 Divider()
 
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        publicationStatusControls
-                        Spacer(minLength: 0)
-                        publicationSaveControls
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        publicationStatusControls
-                        publicationSaveControls
-                    }
-                }
-
+                // 指示条移到动作**之前**：一个告诉你"走到哪一步"的东西，放在需要先知道
+                // 走到哪一步才会去找的位置（原先在本节最底下）是没有意义的。
                 publishFlowIndicator
+
+                publishFlowControls
             }
         }
     }
@@ -737,49 +737,77 @@ struct ComposerView: View {
         .layoutPriority(1)
     }
 
-    private var publicationStatusControls: some View {
-        HStack(spacing: 8) {
-            Text("发布状态")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+    /// 发布这一段的全部动作，收敛成「当前状态 + 一个下一步 + 保存」。
+    ///
+    /// 换掉的是四个语义重叠的控件：分段选择器（选了不生效，还会被刷新冲掉）、更新状态、
+    /// 归档、保存（会顺手改状态却跳过终审与编辑量）。作者的原话是"到处都是按钮，反而
+    /// 不知道下一步该点什么"——写作是非线性的，但发布不是，这一段该只有一个答案。
+    private var publishFlowControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("当前状态")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                publicationStatusPill
+                Spacer(minLength: 0)
 
-            Picker("状态", selection: $store.articleStatus) {
-                ForEach(articleStatuses, id: \.self) { status in
-                    Text(status).tag(status)
+                // 保存只负责保存。它不再携带状态——两条路径写同一个字段正是
+                // "选了已发布、点保存、结果还是已归档"的来源。
+                Button {
+                    Task { await store.saveArticle() }
+                } label: {
+                    Label("保存", systemImage: "tray.and.arrow.down")
                 }
+                .disabled(store.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isLoading)
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 220)
+
+            HStack(alignment: .top, spacing: 8) {
+                if let title = store.publishStep.primaryTitle {
+                    Button {
+                        Task { await store.advancePublishFlow() }
+                    } label: {
+                        Label(title, systemImage: publishStepIcon)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isLoading)
+                }
+
+                Text(store.publishStep.hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+
+                // 非常规动作收进菜单：它们存在，但不该和"下一步"抢位置。
+                Menu {
+                    Button("直接归档（不发表）") {
+                        Task { await store.requestArticleStatusChange(Article.archivedStatus) }
+                    }
+                    .disabled(store.articleStatus == Article.archivedStatus)
+
+                    Button("退回草稿") {
+                        Task { await store.requestArticleStatusChange(Article.draftStatus) }
+                    }
+                    .disabled(store.articleStatus == Article.draftStatus)
+                } label: {
+                    Label("其他", systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(store.isLoading || store.selectedArticleID == nil)
+            }
         }
         .controlSize(.small)
     }
 
-    private var publicationSaveControls: some View {
-        HStack(spacing: 8) {
-            Button {
-                Task { await store.requestArticleStatusChange(store.articleStatus) }
-            } label: {
-                Label("更新状态", systemImage: "checkmark.circle")
-            }
-            .disabled(store.isLoading)
-
-            Button {
-                Task { await store.requestArticleStatusChange("已归档") }
-            } label: {
-                Label("归档", systemImage: "archivebox")
-            }
-            .disabled(store.isLoading || store.articleStatus == "已归档")
-
-            Button {
-                Task { await store.saveArticle() }
-            } label: {
-                Label("保存", systemImage: "tray.and.arrow.down")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(store.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isLoading)
+    private var publishStepIcon: String {
+        switch store.publishStep {
+        case .publish: return "paperplane"
+        case .archive: return "archivebox"
+        case .archivedWithoutPublishing: return "arrow.uturn.backward.circle"
+        case .needsSave, .done: return "checkmark.circle"
         }
-        .controlSize(.small)
     }
 
     private var publicationStatusPill: some View {
