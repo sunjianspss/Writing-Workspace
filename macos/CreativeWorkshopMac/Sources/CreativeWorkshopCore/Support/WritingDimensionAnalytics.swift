@@ -36,8 +36,12 @@ package enum WritingDimensionAnalytics {
 
         for (index, review) in sample.enumerated() {
             for issue in review.issues {
-                let dimension = issue.dimension.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !dimension.isEmpty else { continue }
+                // 归一后再计数：模型会把同一个维度写成「语言腔调（轻微文艺腔）」
+                // 「语言腔调（议论是否节制）」等十几种样子，不归一就散成一堆只出现
+                // 一次的条目，雷达会给出相反的排序（作者库里「语言腔调」合计 10 次、
+                // 足以排第一，散开后六条小尾巴一条都进不了前列）。
+                let dimension = DimensionNormalizer.normalize(issue.dimension)
+                guard dimension != DimensionNormalizer.unlabeled else { continue }
                 if index < half {
                     recentCounts[dimension, default: 0] += 1
                 } else {

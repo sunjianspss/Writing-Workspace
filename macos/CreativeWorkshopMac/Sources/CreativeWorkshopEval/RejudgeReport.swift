@@ -122,20 +122,10 @@ enum RejudgeReport {
             .sorted { ($0.high, $0.total) > ($1.high, $1.total) }
     }
 
-    /// 维度是自由文本，模型会写成「语言腔调（轻微文艺腔）」。括号补语要剥掉，
-    /// 否则同一个维度会散成十几个只出现一次的条目，频次表读不出东西。
+    /// 归一口径搬到了 Core 的 `DimensionNormalizer`，与 App 侧的写作雷达共用一份。
+    /// 此处保留这个入口，调用点不必改。
     static func normalize(_ dimension: String) -> String {
-        var text = dimension.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let index = text.firstIndex(where: { $0 == "（" || $0 == "(" }) {
-            text = String(text[text.startIndex..<index])
-        }
-        for separator in ["·", "：", ":", "/", "、"] {
-            if let range = text.range(of: separator) {
-                text = String(text[text.startIndex..<range.lowerBound])
-            }
-        }
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "未标维度" : text
+        DimensionNormalizer.normalize(dimension)
     }
 
     static func generate(
