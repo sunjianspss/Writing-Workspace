@@ -16,6 +16,21 @@ extension WorkshopStore {
         return 0
     }
 
+    /// 「已发布」这一站是否真的走过。
+    ///
+    /// 指示条原先只按当前状态算站点：已归档 = 第 4 站，于是前面每一站都画成走过。可
+    /// 直接归档的稿子**从没经过发表**，那个勾是句善意的谎——而它恰好谎在数据链缺口的
+    /// 那一站上。判据是 `published_at`：空就是没走过。
+    ///
+    /// 只有这一站需要单独判定。前三站（构思/初稿/待复核）是过程状态，走到已归档就
+    /// 必然经过；只有发表是可以被跳过的。
+    var hasPassedPublishStage: Bool {
+        guard let article = selectedArticle else {
+            return articleStatus == Article.publishedStatus
+        }
+        return !(article.published_at ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// 发布这一段的「下一步」。
     ///
     /// 写作是非线性的，但发布不是——草稿 → 已发布 → 已归档 只有一个方向。此前界面把它

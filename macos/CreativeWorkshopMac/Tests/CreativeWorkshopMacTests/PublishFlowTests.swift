@@ -87,6 +87,38 @@ final class PublishFlowTests: XCTestCase {
         XCTAssertTrue(store.publishStep.hint.contains("终审和编辑量都没记"), store.publishStep.hint)
     }
 
+    // MARK: - 指示条不撒谎
+
+    /// 走过发表再归档：「已发布」那站是真的走过的。
+    func testPublishStageIsMarkedPassedWhenItActuallyWas() throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let article = try saveArticle(database, title: "正常流程", status: Article.draftStatus)
+        _ = try database.updateArticleStatus(id: article.id, status: Article.publishedStatus)
+        _ = try database.updateArticleStatus(id: article.id, status: Article.archivedStatus)
+        store.articles = try database.listArticles()
+        store.selectedArticleID = article.id
+        store.articleStatus = Article.archivedStatus
+
+        XCTAssertEqual(store.publishFlowStageIndex, 4)
+        XCTAssertTrue(store.hasPassedPublishStage)
+    }
+
+    /// 直接归档：指示条把前面每一站都画成走过，但「已发布」其实被跳过了。
+    /// 这个勾恰好谎在数据链缺口的那一站上，所以要能分辨。
+    func testSkippedPublishStageIsNotMarkedPassed() throws {
+        let database = try makeDatabase()
+        let store = try WorkshopStore(database: database, aiClient: FakeAIClient())
+        let article = try saveArticle(database, title: "跳过发表", status: Article.draftStatus)
+        _ = try database.updateArticleStatus(id: article.id, status: Article.archivedStatus)
+        store.articles = try database.listArticles()
+        store.selectedArticleID = article.id
+        store.articleStatus = Article.archivedStatus
+
+        XCTAssertEqual(store.publishFlowStageIndex, 4, "站点位置仍按当前状态算")
+        XCTAssertFalse(store.hasPassedPublishStage, "但这一站没真的走过")
+    }
+
     // MARK: - 保存不再改状态
 
     /// 「选了已发布、点保存、结果还是已归档」的反面：保存一律沿用库里已有的状态。

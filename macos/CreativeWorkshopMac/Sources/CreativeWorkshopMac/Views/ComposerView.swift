@@ -640,7 +640,9 @@ struct ComposerView: View {
                 }
                 HStack(spacing: 3) {
                     if index < store.publishFlowStageIndex {
-                        Image(systemName: "checkmark")
+                        // 「已发布」那一站单独判定：直接归档的稿子没走过它，画空心圈而
+                        // 不是勾——指示条不该在数据链缺口的那一站上说它走过了。
+                        Image(systemName: isSkippedPublishStage(index) ? "circle" : "checkmark")
                             .font(.system(size: 8, weight: .bold))
                     }
                     Text(stage)
@@ -841,6 +843,11 @@ struct ComposerView: View {
             }
         }
         .controlSize(.small)
+    }
+
+    /// 第 3 站是「已发布」。它被画成走过、但 `published_at` 为空时，说明这一站被跳过了。
+    private func isSkippedPublishStage(_ index: Int) -> Bool {
+        index == 3 && !store.hasPassedPublishStage
     }
 
     private var publishStepIcon: String {
