@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CreativeWorkshopCore
 
@@ -61,6 +62,44 @@ extension WorkshopStore {
             self.ideas = try self.database.listIdeas()
             self.stats = try self.database.overviewStats()
             self.statusText = "素材已删除"
+        }
+    }
+
+    /// 粘贴即存：读剪贴板，直接落一条素材，不经过"新建 → 粘贴 → 保存"。
+    ///
+    /// 领域逻辑（标题怎么取、算不算重复）在 Core 的 `PastedMaterial`；这里只做剪贴板读取、
+    /// 落库和投影。剪贴板是 AppKit 的东西，所以留在 Mac target。
+    func pasteMaterialFromClipboard() {
+        let raw = NSPasteboard.general.string(forType: .string) ?? ""
+        guard let draft = PastedMaterial.draft(from: raw) else {
+            statusText = "剪贴板里没有可存的文字"
+            return
+        }
+        if let existing = PastedMaterial.duplicate(of: draft.content, in: ideas) {
+            // 不建第二条，而是把已有那条选中——作者多半是想找它，而不是想再存一遍。
+            editIdea(existing)
+            statusText = "这条素材已经在素材箱里了：\(existing.displayTitle)"
+            return
+        }
+
+        do {
+            let idea = try database.saveIdea(
+                id: nil,
+                payload: IdeaSaveRequest(
+                    title: draft.title,
+                    content: draft.content,
+                    type: "灵感",
+                    tags: [],
+                    used: 0,
+                    related_article_id: nil
+                )
+            )
+            ideas = try database.listIdeas()
+            stats = try database.overviewStats()
+            editIdea(idea)
+            statusText = "已存为素材：\(idea.displayTitle)"
+        } catch {
+            statusText = error.localizedDescription
         }
     }
 

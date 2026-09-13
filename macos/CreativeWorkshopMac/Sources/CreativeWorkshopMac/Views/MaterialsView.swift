@@ -9,12 +9,24 @@ struct MaterialsView: View {
     var body: some View {
         VStack(spacing: 0) {
             WorkshopScreenHeader(group: "工作区", title: "素材箱") {
+                // 粘贴即存排在「新素材」之前，因为它才是常用路径：作者的素材两个来源
+                // （微信收藏、Obsidian）都以复制收尾，手打录入是少数。
+                //
+                // 用 ⇧⌘V 而不是 ⌘V：⌘V 会在整个窗口内被劫持，标题和正文输入框里就粘不了了。
+                Button {
+                    store.pasteMaterialFromClipboard()
+                } label: {
+                    Label("粘贴为素材", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .help("把剪贴板里的文字直接存成一条素材（⇧⌘V）")
+
                 Button {
                     store.newMaterial()
                 } label: {
                     Label("新素材", systemImage: "plus")
                 }
-                .buttonStyle(.borderedProminent)
             }
 
             // 列表与编辑器在右列内部左右分栏——两列结构下这是「列表 + 详情」的落法。
