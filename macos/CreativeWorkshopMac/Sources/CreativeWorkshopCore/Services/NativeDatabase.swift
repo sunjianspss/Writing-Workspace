@@ -915,12 +915,15 @@ package final class NativeDatabase {
         )
     }
 
+    /// `usedFallback` 由调用方按 `AIRun.success` 传入，在写入那一刻就定下来——
+    /// 事后靠 `style_notes` 里那句话去猜是不可靠的，而且那句话本身也可能被改掉。
     package func saveWritingReview(
         result: WritingReviewResult,
         articleID: Int?,
         titleSnapshot: String,
         model: String,
-        reviewedSnapshot: String
+        reviewedSnapshot: String,
+        usedFallback: Bool
     ) throws -> WritingReview {
         let now = utcNow()
         let normalizedSummary = result.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -932,8 +935,8 @@ package final class NativeDatabase {
             INSERT INTO writing_reviews
                 (article_id, title_snapshot, summary, overall_score, strengths, issues,
                  revision_plan, training_focus, style_notes, raw_output, model, created_at,
-                 resolved_from_last, reviewed_snapshot, pitfall_hits)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 resolved_from_last, reviewed_snapshot, pitfall_hits, used_fallback)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 articleID,
@@ -950,7 +953,8 @@ package final class NativeDatabase {
                 now,
                 encodeStringArray(result.resolved_from_last ?? []),
                 reviewedSnapshot,
-                encodeStringArray(result.pitfall_hits ?? [])
+                encodeStringArray(result.pitfall_hits ?? []),
+                usedFallback ? 1 : 0
             ]
         )
         return try getWritingReview(Int(sqlite3_last_insert_rowid(db)))
@@ -1339,7 +1343,8 @@ package final class NativeDatabase {
                 style_notes TEXT,
                 raw_output TEXT,
                 model TEXT,
-                created_at TEXT
+                created_at TEXT,
+                used_fallback INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS publish_assets (
@@ -1517,6 +1522,7 @@ package final class NativeDatabase {
         try ensureColumn(table: "writing_reviews", name: "resolved_from_last", definition: "TEXT")
         try ensureColumn(table: "writing_reviews", name: "reviewed_snapshot", definition: "TEXT")
         try ensureColumn(table: "writing_reviews", name: "pitfall_hits", definition: "TEXT")
+        try ensureColumn(table: "writing_reviews", name: "used_fallback", definition: "INTEGER NOT NULL DEFAULT 0")
         try ensureColumn(table: "writing_advisor_runs", name: "context_findings", definition: "TEXT")
         try ensureColumn(table: "writing_advisor_runs", name: "execution_plan", definition: "TEXT")
         try ensureColumn(table: "writing_advisor_runs", name: "risk_notes", definition: "TEXT")
@@ -1579,6 +1585,24 @@ package final class NativeDatabase {
                           )
                         """,
                         [Topic.pendingStatus]
+                    )
+                }
+            ),
+            (
+                version: 13,
+                name: "回填历史诊断的兜底标记",
+                apply: {
+                    // `used_fallback` 从现在起在写入时落下，但历史行全是 0。唯一能识别它们的
+                    // 线索是 `NativeFallbacks` 每次都会追加到 style_notes 的那句固定文案。
+                    //
+                    // 只按这一句匹配，不做别的推断：它是兜底路径无条件写入的，真诊断不会有。
+                    try self.execute(
+                        """
+                        UPDATE writing_reviews
+                        SET used_fallback = 1
+                        WHERE style_notes LIKE ?
+                        """,
+                        ["%当前诊断来自本地规则%"]
                     )
                 }
             )
@@ -1857,7 +1881,8 @@ package final class NativeDatabase {
             created_at: text(statement, 12),
             resolved_from_last: decodeStringArray(text(statement, 13)),
             reviewed_snapshot: text(statement, 14),
-            pitfall_hits: decodeStringArray(text(statement, 15))
+            pitfall_hits: decodeStringArray(text(statement, 15)),
+            used_fallback: int(statement, 16) == 1
         )
     }
 
@@ -2223,7 +2248,7 @@ package final class NativeDatabase {
 }
 
 private let nativeDatabaseLegacyBaselineVersion = 10
-private let nativeDatabaseSchemaVersion = 12
+private let nativeDatabaseSchemaVersion = 13
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 private let topicSelectSQL = """
@@ -2252,7 +2277,7 @@ FROM style_profiles
 private let writingReviewSelectSQL = """
 SELECT id, article_id, title_snapshot, summary, overall_score, strengths, issues,
        revision_plan, training_focus, style_notes, raw_output, model, created_at,
-       resolved_from_last, reviewed_snapshot, pitfall_hits
+       resolved_from_last, reviewed_snapshot, pitfall_hits, used_fallback
 FROM writing_reviews
 """
 

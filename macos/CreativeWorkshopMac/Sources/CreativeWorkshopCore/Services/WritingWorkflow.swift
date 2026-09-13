@@ -726,7 +726,8 @@ package struct WritingWorkflow {
                 articleID: request.analysis.articleID,
                 titleSnapshot: request.analysis.titleSnapshot,
                 model: request.analysis.config.model,
-                reviewedSnapshot: request.reviewedSnapshot
+                reviewedSnapshot: request.reviewedSnapshot,
+                usedFallback: !run.success
             )
             return ReviewOutcome(
                 agentRun: agentRun,

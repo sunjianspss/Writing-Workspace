@@ -218,7 +218,8 @@ final class WorkshopStoreTests: XCTestCase {
             articleID: nil,
             titleSnapshot: store.title,
             model: "fake",
-            reviewedSnapshot: ["一篇文章", "", "正文", "", ""].joined(separator: "\u{1F}")
+            reviewedSnapshot: ["一篇文章", "", "正文", "", ""].joined(separator: "\u{1F}"),
+            usedFallback: false
         )
 
         await store.reviewCurrentDraft()

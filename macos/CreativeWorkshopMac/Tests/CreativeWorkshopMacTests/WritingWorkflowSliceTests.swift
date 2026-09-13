@@ -417,7 +417,8 @@ final class WritingWorkflowReviseTests: XCTestCase {
             articleID: nil,
             titleSnapshot: "测试稿",
             model: "test-model",
-            reviewedSnapshot: "原始正文"
+            reviewedSnapshot: "原始正文",
+            usedFallback: false
         )
         return .init(
             analysis: .init(

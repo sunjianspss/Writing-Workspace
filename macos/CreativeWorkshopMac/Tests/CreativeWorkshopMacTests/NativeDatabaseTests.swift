@@ -14,7 +14,7 @@ final class NativeDatabaseTests: XCTestCase {
         let stats = try database.overviewStats()
         XCTAssertEqual(stats.article_total, 0)
         XCTAssertEqual(stats.topic_total, 0)
-        XCTAssertEqual(try database.schemaVersion(), 12)
+        XCTAssertEqual(try database.schemaVersion(), 13)
     }
 
     func testVersionedMigrationCreatesBackupThatCanRestorePreMigrationData() throws {
@@ -22,11 +22,11 @@ final class NativeDatabaseTests: XCTestCase {
         let backupURL = NativeDatabase.migrationBackupURL(
             for: databaseURL,
             fromVersion: 10,
-            toVersion: 12
+            toVersion: 13
         )
 
         var migratedDatabase: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try migratedDatabase?.schemaVersion(), 12)
+        XCTAssertEqual(try migratedDatabase?.schemaVersion(), 13)
         XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
 
         _ = try migratedDatabase?.saveArticle(
@@ -46,7 +46,7 @@ final class NativeDatabaseTests: XCTestCase {
         try NativeDatabase.restoreMigrationBackup(at: backupURL, to: databaseURL)
 
         let restoredDatabase = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try restoredDatabase.schemaVersion(), 12)
+        XCTAssertEqual(try restoredDatabase.schemaVersion(), 13)
         XCTAssertEqual(try restoredDatabase.listArticles().first?.title, "迁移前标题")
     }
 
@@ -68,7 +68,7 @@ final class NativeDatabaseTests: XCTestCase {
             _
         ) {
             XCTAssertEqual(fromVersion, 10)
-            XCTAssertEqual(toVersion, 12)
+            XCTAssertEqual(toVersion, 13)
             XCTAssertTrue(restored)
             XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
         }
@@ -77,7 +77,7 @@ final class NativeDatabaseTests: XCTestCase {
         // 失败尝试没有推进版本、删除文章或留下半迁移状态。
         try executeRawSQL("DROP TABLE schema_migrations;", at: databaseURL)
         let recoveredDatabase = try NativeDatabase(databaseURL: databaseURL)
-        XCTAssertEqual(try recoveredDatabase.schemaVersion(), 12)
+        XCTAssertEqual(try recoveredDatabase.schemaVersion(), 13)
         XCTAssertEqual(try recoveredDatabase.listArticles().first?.title, "失败前仍需保留")
     }
 
@@ -124,7 +124,7 @@ final class NativeDatabaseTests: XCTestCase {
 
         let database = try NativeDatabase(databaseURL: databaseURL)
 
-        XCTAssertEqual(try database.schemaVersion(), 12)
+        XCTAssertEqual(try database.schemaVersion(), 13)
         let version = try database.saveDraftVersion(
             articleID: nil,
             titleSnapshot: "真实旧库",
@@ -415,7 +415,8 @@ final class NativeDatabaseTests: XCTestCase {
             articleID: article.id,
             titleSnapshot: article.displayTitle,
             model: "deepseek-v4-pro",
-            reviewedSnapshot: "标题\n摘要\n正文\n大纲\n想法"
+            reviewedSnapshot: "标题\n摘要\n正文\n大纲\n想法",
+            usedFallback: false
         )
 
         XCTAssertEqual(review.article_id, article.id)
@@ -1195,7 +1196,7 @@ final class NativeDatabaseTests: XCTestCase {
 
         let migrated = try NativeDatabase(databaseURL: databaseURL)
 
-        XCTAssertEqual(try migrated.schemaVersion(), 12)
+        XCTAssertEqual(try migrated.schemaVersion(), 13)
         let remaining = Set(try migrated.listTopics().map(\.title))
         XCTAssertEqual(
             remaining,
@@ -1205,6 +1206,58 @@ final class NativeDatabaseTests: XCTestCase {
                 "被引用过的模板选题，为什么值得认真写一次"
             ],
             "只该删掉未被引用的整句模板；真选题与已被文章引用的必须留下"
+        )
+    }
+
+    /// 迁移 v13：历史诊断的兜底标记回填。
+    ///
+    /// `used_fallback` 从 v13 起在写入时落下，但此前的行全是 0。唯一能识别它们的线索是
+    /// `NativeFallbacks` 每次都会追加到 style_notes 的那句固定文案。
+    func testVersion13BackfillsFallbackFlagFromStyleNotes() throws {
+        let (databaseURL, _) = try makeVersion10Database(articleTitle: "稿")
+
+        var seeding: NativeDatabase? = try NativeDatabase(databaseURL: databaseURL)
+        let fallback = try XCTUnwrap(seeding).saveWritingReview(
+            result: reviewResult(styleNotes: ["当前诊断来自本地规则，只做保底参考；配置 API Key 后会得到更细的编辑反馈。"]),
+            articleID: nil, titleSnapshot: "稿", model: "deepseek-v4-pro",
+            reviewedSnapshot: "正文", usedFallback: false   // 故意写成 false，模拟历史数据
+        )
+        let real = try XCTUnwrap(seeding).saveWritingReview(
+            result: reviewResult(styleNotes: ["句子偏长，读起来略拗口。"]),
+            articleID: nil, titleSnapshot: "稿", model: "deepseek-v4-pro",
+            reviewedSnapshot: "正文", usedFallback: false
+        )
+        seeding = nil
+        try executeRawSQL("DROP TABLE IF EXISTS schema_migrations; PRAGMA user_version = 10;", at: databaseURL)
+
+        let migrated = try NativeDatabase(databaseURL: databaseURL)
+        let reviews = try migrated.listWritingReviews(limit: 10)
+
+        XCTAssertEqual(try migrated.schemaVersion(), 13)
+        XCTAssertEqual(reviews.first(where: { $0.id == fallback.id })?.used_fallback, true, "带标记文案的必须回填成兜底")
+        XCTAssertEqual(reviews.first(where: { $0.id == real.id })?.used_fallback, false, "真诊断不得被误标")
+    }
+
+    /// 新写入的诊断在落库那一刻就带上标记，不依赖事后从文案里猜。
+    func testNewReviewRecordsFallbackFlagAtWriteTime() throws {
+        let database = try makeDatabase()
+
+        let fallback = try database.saveWritingReview(
+            result: reviewResult(styleNotes: []), articleID: nil, titleSnapshot: "稿",
+            model: "deepseek-v4-pro", reviewedSnapshot: "正文", usedFallback: true
+        )
+
+        XCTAssertTrue(fallback.used_fallback)
+        XCTAssertEqual(
+            try database.listWritingReviews(limit: 1).first?.used_fallback, true,
+            "标记要落库，不只是返回值"
+        )
+    }
+
+    private func reviewResult(styleNotes: [String]) -> WritingReviewResult {
+        WritingReviewResult(
+            summary: "一句话诊断", overall_score: 75, strengths: [], issues: [],
+            revision_plan: [], training_focus: [], style_notes: styleNotes, raw_output: nil
         )
     }
 

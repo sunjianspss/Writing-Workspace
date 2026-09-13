@@ -77,7 +77,39 @@ final class DimensionNormalizerTests: XCTestCase {
         )
     }
 
-    private func review(dimensions: [String]) -> WritingReview {
+    // MARK: - 兜底诊断不进雷达
+
+    /// 兜底是本地规则产出的，维度由规则决定而不是由稿件决定。作者库里「正文」「展开」
+    /// 这两个维度只在兜底里出现过，真诊断一次都没有——混进来就是看着像真实问题的假信号。
+    func testFallbackReviewsAreExcludedFromTheRadar() {
+        let reviews = [
+            review(dimensions: ["正文", "展开"], usedFallback: true),
+            review(dimensions: ["语言腔调"]),
+            review(dimensions: ["语言腔调"])
+        ]
+
+        let trends = WritingDimensionAnalytics.trends(from: reviews)
+
+        XCTAssertEqual(trends.map(\.dimension), ["语言腔调"])
+        XCTAssertEqual(trends.first?.totalCount, 2)
+        XCTAssertFalse(
+            trends.contains { $0.dimension == "正文" || $0.dimension == "展开" },
+            "兜底规则造出来的维度不该出现在雷达里：\(trends.map(\.dimension))"
+        )
+    }
+
+    /// 过滤发生在取样之前：否则兜底会占掉 sampleSize 的额度，把真诊断挤出统计。
+    func testFallbackIsFilteredBeforeSampling() {
+        var reviews = Array(repeating: review(dimensions: ["正文"], usedFallback: true), count: 5)
+        reviews.append(contentsOf: Array(repeating: review(dimensions: ["结构"]), count: 3))
+
+        let trends = WritingDimensionAnalytics.trends(from: reviews, sampleSize: 5)
+
+        XCTAssertEqual(trends.first?.dimension, "结构")
+        XCTAssertEqual(trends.first?.totalCount, 3, "五条兜底不该吃掉样本额度")
+    }
+
+    private func review(dimensions: [String], usedFallback: Bool = false) -> WritingReview {
         WritingReview(
             id: 0,
             article_id: nil,
@@ -93,7 +125,8 @@ final class DimensionNormalizerTests: XCTestCase {
             style_notes: [],
             raw_output: nil,
             model: "test-model",
-            created_at: nil
+            created_at: nil,
+            used_fallback: usedFallback
         )
     }
 }

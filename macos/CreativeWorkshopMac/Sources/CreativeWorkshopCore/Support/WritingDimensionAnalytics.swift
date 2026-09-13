@@ -27,7 +27,10 @@ package enum WritingDimensionAnalytics {
     /// - Parameter reviews: 按时间倒序（最新在前）排列的历史诊断，如 `WorkshopStore.writingReviews`。
     /// - Parameter sampleSize: 参与统计的最近诊断条数上限。
     package static func trends(from reviews: [WritingReview], sampleSize: Int = 20) -> [DimensionTrend] {
-        let sample = Array(reviews.prefix(max(1, sampleSize)))
+        // 兜底诊断不参与统计：它是本地规则产出的，维度由规则决定而不是由稿件决定。
+        // 作者库里「正文 8×」「展开 1×」这两个维度只在兜底里出现过，真诊断一次都没有——
+        // 混进来就变成了看着像真实写作问题的假信号。先过滤再取样，否则兜底会占掉样本额度。
+        let sample = Array(reviews.lazy.filter { !$0.used_fallback }.prefix(max(1, sampleSize)))
         guard !sample.isEmpty else { return [] }
 
         let half = max(1, sample.count / 2)

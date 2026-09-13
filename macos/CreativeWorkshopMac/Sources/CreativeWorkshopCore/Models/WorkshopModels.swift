@@ -871,6 +871,13 @@ package struct WritingReview: Codable, Identifiable, Hashable {
     package var reviewed_snapshot: String?
     /// 本次诊断判定命中的"作者常见雷区"原文描述（22.4.3），由模型显式输出，未命中留空。
     package var pitfall_hits: [String] = []
+    /// 这一条是不是本地兜底产出的（无 API Key 或模型失败时 `NativeFallbacks` 的规则诊断）。
+    ///
+    /// 此前兜底与真诊断混在同一张表里**无法分辨**：`model` 字段两者都写着模型名，唯一线索
+    /// 是 `style_notes` 里那句"当前诊断来自本地规则"。于是写作雷达把兜底规则造出来的维度
+    /// 当成了真实写作问题——作者库里「正文 8×」「展开 1×」在真诊断里一次都没出现过，
+    /// 完全是本地规则的产物。与选题那条（兜底模板混进选题库）是同一种病。
+    package var used_fallback: Bool = false
 }
 
 package struct WritingReviewResult: Codable, Hashable {
